@@ -1,0 +1,52 @@
+name: iOS build check
+
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  core-tests:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run logic tests (parser, grading, on-the-way, 4-stop limit)
+        working-directory: Packages/GigCore
+        run: swift test
+
+  build-app:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install XcodeGen
+        run: brew install xcodegen
+      - name: Generate Xcode project
+        run: xcodegen generate
+      - name: Compile app + broadcast extension (simulator, unsigned)
+        run: |
+          xcodebuild -project GigGrade.xcodeproj -scheme GigGrade \
+            -destination 'generic/platform=iOS Simulator' \
+            -configuration Debug CODE_SIGNING_ALLOWED=NO build
+
+  unsigned-ipa:
+    # Unsigned .ipa for sideloading from Windows (e.g. Sideloadly + a free Apple ID).
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Generate project
+        run: |
+          brew install xcodegen
+          xcodegen generate
+      - name: Build for iPhone (unsigned)
+        run: |
+          xcodebuild -project GigGrade.xcodeproj -scheme GigGrade -configuration Release \
+            -sdk iphoneos -destination 'generic/platform=iOS' -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" build
+      - name: Package .ipa
+        run: |
+          mkdir -p Payload
+          cp -R build/Build/Products/Release-iphoneos/GigGrade.app Payload/
+          zip -qry GigGrade-unsigned.ipa Payload
+      - uses: actions/upload-artifact@v4
+        with:
+          name: GigGrade-unsigned-ipa
+          path: GigGrade-unsigned.ipa

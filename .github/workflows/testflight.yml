@@ -1,0 +1,64 @@
+name: Build & send to TestFlight
+
+# Run from GitHub: Actions tab → "Build & send to TestFlight" → Run workflow.
+# Needs these repository secrets (Settings → Secrets and variables → Actions):
+#   APPLE_TEAM_ID      your 10-character Team ID (developer.apple.com → Membership)
+#   ASC_KEY_ID         App Store Connect API key ID
+#   ASC_ISSUER_ID      App Store Connect API issuer ID
+#   ASC_KEY_P8         the full text of the AuthKey_XXXX.p8 file
+# and this repository variable:
+#   BASE_BUNDLE_ID     e.g. com.yourname.giggrade  (must match the app you created in App Store Connect)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  testflight:
+    runs-on: macos-15
+    env:
+      TEAM: ${{ secrets.APPLE_TEAM_ID }}
+      KEY_ID: ${{ secrets.ASC_KEY_ID }}
+      ISSUER: ${{ secrets.ASC_ISSUER_ID }}
+      KEY_P8: ${{ secrets.ASC_KEY_P8 }}
+      BUNDLE: ${{ vars.BASE_BUNDLE_ID }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check settings
+        run: |
+          for v in TEAM KEY_ID ISSUER KEY_P8 BUNDLE; do
+            if [ -z "${!v}" ]; then echo "::error::Missing $v — see the comments at the top of this workflow"; exit 1; fi
+          done
+
+      - name: Install XcodeGen and generate project
+        run: |
+          brew install xcodegen
+          xcodegen generate
+
+      - name: Save API key
+        run: |
+          mkdir -p "$HOME/private_keys"
+          printf '%s\n' "$KEY_P8" > "$HOME/private_keys/AuthKey_$KEY_ID.p8"
+
+      - name: Archive (signed in the cloud)
+        run: |
+          xcodebuild -project GigGrade.xcodeproj -scheme GigGrade -configuration Release \
+            -destination 'generic/platform=iOS' \
+            -archivePath "$RUNNER_TEMP/GigGrade.xcarchive" \
+            DEVELOPMENT_TEAM="$TEAM" BASE_BUNDLE_ID="$BUNDLE" \
+            CURRENT_PROJECT_VERSION="${{ github.run_number }}" \
+            -allowProvisioningUpdates \
+            -authenticationKeyPath "$HOME/private_keys/AuthKey_$KEY_ID.p8" \
+            -authenticationKeyID "$KEY_ID" -authenticationKeyIssuerID "$ISSUER" \
+            archive
+
+      - name: Upload to TestFlight
+        run: |
+          sed "s/TEAM_ID_HERE/$TEAM/" ExportOptions.plist > "$RUNNER_TEMP/ExportOptions.plist"
+          xcodebuild -exportArchive \
+            -archivePath "$RUNNER_TEMP/GigGrade.xcarchive" \
+            -exportOptionsPlist "$RUNNER_TEMP/ExportOptions.plist" \
+            -exportPath "$RUNNER_TEMP/export" \
+            -allowProvisioningUpdates \
+            -authenticationKeyPath "$HOME/private_keys/AuthKey_$KEY_ID.p8" \
+            -authenticationKeyID "$KEY_ID" -authenticationKeyIssuerID "$ISSUER"
