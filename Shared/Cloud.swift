@@ -12,6 +12,9 @@ actor Cloud {
 
     static var isConfigured: Bool { !SupabaseSecrets.url.isEmpty && !SupabaseSecrets.secretKey.isEmpty }
 
+    /// The Supabase project this build talks to (shown on Home; not secret).
+    static var projectHost: String { URL(string: SupabaseSecrets.url)?.host ?? "none" }
+
     /// Single user, no login: the secret key (from Codemagic) authorizes everything.
     private static let folder = "offers" // screenshots live in screenshots/offers/
 
@@ -93,12 +96,19 @@ actor Cloud {
         let (data, resp) = try await session.data(for: req)
         let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
         guard (200..<300).contains(code) else {
-            let detail = String(decoding: data.prefix(160), as: UTF8.self)
+            // Show exactly what Supabase said (never the key), so problems can be diagnosed from the phone.
+            var detail = String(decoding: data.prefix(220), as: UTF8.self)
+            if let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                let parts = [obj["code"], obj["error"], obj["message"], obj["msg"], obj["hint"]]
+                    .compactMap { $0.map { "\($0)" } }.filter { !$0.isEmpty && $0 != "<null>" }
+                if !parts.isEmpty { detail = parts.joined(separator: " · ") }
+            }
+            if detail.isEmpty { detail = "(no details)" }
+            let place = "\(method) \(url.host ?? "?")\(url.path)"
             let msg: String
             switch code {
-            case 401, 403: msg = "Key rejected — check SUPABASE_SECRET_KEY in Codemagic"
-            case 404 where path.contains("/rest/"): msg = "Tables missing — run setup.sql in Supabase"
-            default: msg = "Error \(code): \(detail)"
+            case 401, 403: msg = "Key rejected (\(code)) — \(detail) — \(place)"
+            default: msg = "Error \(code) — \(detail) — \(place)"
             }
             setStatus(ok: false, msg)
             throw CloudError(message: msg)

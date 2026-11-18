@@ -263,6 +263,11 @@ struct ConnectionStatus: View {
                 let cloud = Cloud.status()
                 Label(cloud.message, systemImage: cloud.ok ? "icloud.fill" : "icloud.slash")
                     .foregroundStyle(cloud.ok ? Color.green : (Cloud.isConfigured ? Color.orange : Color.secondary))
+                    .textSelection(.enabled)
+                if let at = cloud.at {
+                    Text("Last cloud check \(at.formatted(date: .omitted, time: .standard)) · \(Cloud.projectHost)")
+                        .font(.caption2).foregroundStyle(.secondary)
+                }
                 Text(SharedStore.appGroup).font(.caption2).foregroundStyle(.tertiary)
             }
             .font(.subheadline)
