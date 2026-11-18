@@ -141,7 +141,7 @@ struct HomeView: View {
         Customer dropoff
         Deliver by 7:45 PM
         Decline   Accept
-        """)
+        """, immediate: true)
         NotificationCenter.default.post(name: .logChanged, object: nil)
     }
 }

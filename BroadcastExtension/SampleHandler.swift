@@ -53,10 +53,7 @@ class SampleHandler: RPBroadcastSampleHandler {
             let handler = VNImageRequestHandler(cvPixelBuffer: pixelBuffer, orientation: orientation, options: [:])
             do {
                 try handler.perform([request])
-                let text = (request.results ?? [])
-                    .sorted { $0.boundingBox.minY > $1.boundingBox.minY } // top of screen first
-                    .compactMap { $0.topCandidates(1).first?.string }
-                    .joined(separator: "\n")
+                guard let text = Self.offerText(from: request.results ?? []) else { return } // GigGrade's own screen
                 let ctx = ciContext
                 OfferPipeline.shared.handle(text: text, screenshot: {
                     Self.jpeg(pixelBuffer, orientation: orientation, context: ctx)
@@ -65,6 +62,38 @@ class SampleHandler: RPBroadcastSampleHandler {
                 // Skip this frame.
             }
         }
+    }
+
+    /// Turns what Vision read into text for the parser, minus anything GigGrade drew itself:
+    /// - returns nil when the screen is GigGrade's own app (so it never grades its own numbers)
+    /// - drops the text inside GigGrade's notification banner sitting on top of a gig app
+    static func offerText(from observations: [VNRecognizedTextObservation]) -> String? {
+        let lines = observations
+            .sorted { $0.boundingBox.minY > $1.boundingBox.minY } // top of screen first
+            .compactMap { o in o.topCandidates(1).first.map { (box: o.boundingBox, text: $0.string) } }
+        let all = lines.map { $0.text.lowercased() }.joined(separator: "\n")
+
+        // GigGrade's own screens: its tab bar, offer details, or banner settings.
+        let ownScreen = (all.contains("insights") && all.contains("earnings"))
+            || all.contains("delete this offer")
+            || all.contains("banner and sounds")
+            || all.contains("today's offers")
+        if ownScreen { return nil }
+
+        // GigGrade banner: from its "GIGGRADE" header down ~18% of the screen.
+        var bannerBands: [ClosedRange<CGFloat>] = []
+        for l in lines where l.text.lowercased().contains("giggrade") {
+            bannerBands.append((l.box.minY - 0.18)...(l.box.maxY + 0.01))
+        }
+        let ownWording = ["/hr", "/mi", "% of $", "after costs", "on the way", "off route", "ends near",
+                          "per extra mile", "couldn't locate", "route already has", "accepted + add",
+                          "🟢", "🟡", "🔴", "good ·", "fair ·", "bad ·"]
+        let kept = lines.filter { l in
+            if bannerBands.contains(where: { $0.contains(l.box.midY) }) { return false }
+            let t = l.text.lowercased()
+            return !ownWording.contains { t.contains($0) }
+        }
+        return kept.map { $0.text }.joined(separator: "\n")
     }
 
     /// Half-size JPEG of the current frame (~100–200 KB) for the Offers log.

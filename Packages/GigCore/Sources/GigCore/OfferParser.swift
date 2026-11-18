@@ -86,7 +86,11 @@ public enum OfferParser {
     }
 
     // MARK: pay
+    static let rateLine = Rx(#"(/\s?hr|/\s?mi\b|per\s+hour|per\s+mile|an\s+hour|% of \$)"#)
+
     static func pickPay(_ lines: [String]) -> Double? {
+        // Rates like "$21/hr" or "$1.50/mi" are never the pay.
+        let lines = lines.filter { !rateLine.contains($0) }
         // Prefer a $ amount on a "guaranteed / total / incl. tips" line…
         if let line = lines.first(where: { totalCue.contains($0) && money.contains($0) }),
            let g = money.first(line)?.groups[1] {

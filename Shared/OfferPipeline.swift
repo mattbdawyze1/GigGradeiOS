@@ -8,27 +8,48 @@ final class OfferPipeline {
     private let store = SharedStore.shared
     private let log = OfferLog.shared
     private let lock = NSLock()
-    private var lastKey: String?
+    private var lastKey: String?          // offer whose banner is currently up
+    private var activePay: Double?        // pay of that offer
     private var lastSeen = Date.distantPast
+    private var candidateKey: String?     // a new reading waiting to be confirmed
+    private var candidateCount = 0
 
     private var currentKey: String? { lock.lock(); defer { lock.unlock() }; return lastKey }
 
-    func reset() { lock.lock(); lastKey = nil; lock.unlock() }
+    func reset() {
+        lock.lock()
+        lastKey = nil; activePay = nil; candidateKey = nil; candidateCount = 0
+        lock.unlock()
+    }
 
-    /// - Parameter screenshot: called only when a NEW offer is found; returns a JPEG of the screen.
-    func handle(text: String, screenshot: (() -> Data?)? = nil) {
+    /// Rules so one offer = one banner:
+    /// - an offer must read the same on 2 scans in a row before it alerts (filters one-frame misreads);
+    /// - while an offer stays on screen, nothing new alerts unless the pay itself changes;
+    /// - once no offer has been seen for 3 seconds, the screen counts as cleared.
+    ///
+    /// - Parameters:
+    ///   - screenshot: called only when a NEW offer is confirmed; returns a JPEG of the screen.
+    ///   - immediate: skip the 2-scan check (used by "Test with a sample offer").
+    func handle(text: String, screenshot: (() -> Data?)? = nil, immediate: Bool = false) {
         let now = Date()
         guard let offer = OfferParser.parse(text) else {
-            // Offer screen went away -> the same numbers may alert again later.
-            lock.lock(); if now.timeIntervalSince(lastSeen) > 5 { lastKey = nil }; lock.unlock()
+            lock.lock()
+            if now.timeIntervalSince(lastSeen) > 3 {
+                lastKey = nil; activePay = nil; candidateKey = nil; candidateCount = 0
+            }
+            lock.unlock()
             return
         }
+
         lock.lock()
         lastSeen = now
-        let duplicate = offer.key == lastKey
-        lastKey = offer.key
+        if offer.key == candidateKey { candidateCount += 1 } else { candidateKey = offer.key; candidateCount = 1 }
+        let confirmed = immediate || candidateCount >= 2
+        let sameOfferStillUp = activePay.map { abs($0 - offer.pay) < 0.01 } ?? false
+        let shouldAlert = confirmed && !sameOfferStillUp && offer.key != lastKey
+        if shouldAlert { lastKey = offer.key; activePay = offer.pay }
         lock.unlock()
-        if duplicate { return }
+        if !shouldAlert { return }
 
         let settings = store.settings
         let prefs = store.notificationPrefs

@@ -106,4 +106,10 @@ final class V2Tests: XCTestCase {
         XCTAssertEqual(log.records(dayKey: key).count, 1)
         try? FileManager.default.removeItem(at: dir)
     }
+
+    func testRatesAreNeverPay() throws {
+        let text = "Uber\n$8.40\nIncludes expected tip\n$42/hr · 168% of $25\n$3.10/mi\n6 mins (1.2 mi) away\n6 mins (1.5 mi) trip\nAccept"
+        let o = try XCTUnwrap(OfferParser.parse(text))
+        XCTAssertEqual(o.pay, 8.40, accuracy: 0.001)
+    }
 }
