@@ -47,14 +47,14 @@ public struct BannerLayout: Codable, Equatable {
         self.order = order
     }
 
-    /// Verdict on line 2 so it's always visible; rates on 3; trip on 4.
+    /// Offer on line 1, rates on line 2, the on-the-way verdict on line 3 (always visible), trip details on 4.
     public static let standard = BannerLayout(slots: [
         .color: .title, .grade: .title, .app: .title, .pay: .title,
-        .verdict: .line2,
-        .hourly: .line3, .perMile: .line3,
+        .hourly: .line2, .perMile: .line2,
+        .verdict: .line3,
         .miles: .line4, .minutes: .line4, .net: .line4,
         .dropoff: .off,
-    ], order: [.color, .grade, .app, .pay, .verdict, .hourly, .perMile, .miles, .minutes, .net, .dropoff])
+    ], order: [.color, .grade, .app, .pay, .hourly, .perMile, .verdict, .miles, .minutes, .net, .dropoff])
 
     public func slot(_ item: BannerItem) -> BannerSlot { slots[item.rawValue] ?? .off }
 

@@ -8,11 +8,11 @@ final class BannerLayoutTests: XCTestCase {
         .net: "net $7.36", .verdict: "✅ ON THE WAY · ends 1.3 mi from last stop",
     ]
 
-    func testStandardLayoutPutsVerdictOnLine2() {
+    func testStandardLayoutPutsVerdictOnLine3() {
         let t = BannerLayout.standard.compose(values)
         XCTAssertEqual(t.title, "🟡 Fair · C · Uber · $10.06")
-        XCTAssertEqual(t.subtitle, "✅ ON THE WAY · ends 1.3 mi from last stop")
-        XCTAssertEqual(t.body, "$18.29/hr⚠️ · $1.12/mi⚠️\n9.0 mi · 33 min · net $7.36")
+        XCTAssertEqual(t.subtitle, "$18.29/hr⚠️ · $1.12/mi⚠️")
+        XCTAssertEqual(t.body, "✅ ON THE WAY · ends 1.3 mi from last stop\n9.0 mi · 33 min · net $7.36")
     }
 
     func testCustomLinesAndOrder() {
@@ -23,7 +23,8 @@ final class BannerLayoutTests: XCTestCase {
         l.order = [.pay, .hourly, .color, .app] + l.order.filter { ![.pay, .hourly, .color, .app].contains($0) }
         let t = l.compose(values)
         XCTAssertEqual(t.title, "$10.06 · $18.29/hr⚠️ · 🟡 Fair · Uber")
-        XCTAssertEqual(t.body, "$1.12/mi⚠️\n9.0 mi · 33 min\nnet $7.36")
+        XCTAssertEqual(t.subtitle, "$1.12/mi⚠️")
+        XCTAssertEqual(t.body, "✅ ON THE WAY · ends 1.3 mi from last stop\n9.0 mi · 33 min\nnet $7.36")
     }
 
     func testMissingValuesAreSkippedAndTitleNeverEmpty() {
@@ -40,7 +41,7 @@ final class BannerLayoutTests: XCTestCase {
         p.showNet = false
         XCTAssertEqual(p.effectiveLayout.slot(.grade), .off)
         XCTAssertEqual(p.effectiveLayout.slot(.net), .off)
-        XCTAssertEqual(p.effectiveLayout.slot(.verdict), .line2)
+        XCTAssertEqual(p.effectiveLayout.slot(.verdict), .line3)
 
         var custom = BannerLayout.standard
         custom.set(.miles, .title)

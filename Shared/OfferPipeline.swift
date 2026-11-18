@@ -69,12 +69,17 @@ final class OfferPipeline {
         let dayKey = OfferLog.dayKey(record.date)
         Task { await Cloud.shared.queueOffer(id: record.id, dayKey: dayKey) }
 
-        OfferAlert.post(record: record, offer: offer, score: score, settings: settings, prefs: prefs,
-                        otw: nil, // the on-the-way verdict arrives a second later, once addresses are located
-                        canAddToRoute: false, silent: false)
-
-        // 2) Locate pickup/dropoff, then update the same banner with the on-the-way verdict.
+        // ONE banner per offer: wait for the on-the-way check, but never more than 3.5 s.
+        // If the lookups are slow, post without the verdict at the deadline and don't send a second banner.
         let saved = record
+        let gate = PostOnce()
+        DispatchQueue.global().asyncAfter(deadline: .now() + 3.5) { [weak self] in
+            guard let self, self.currentKey == offer.key, gate.claim() else { return }
+            OfferAlert.post(record: saved, offer: offer, score: score, settings: settings, prefs: prefs,
+                            otw: nil, canAddToRoute: false, silent: false)
+        }
+
+        // 2) Locate pickup/dropoff, run the on-the-way check, then post the banner.
         Task {
             let near = store.currentLocation
             let orderId = saved.id.uuidString
@@ -133,10 +138,22 @@ final class OfferPipeline {
             if otw?.message != nil || p != nil || d != nil {
                 await Cloud.shared.queueOffer(id: saved.id, dayKey: OfferLog.dayKey(saved.date)) // route note + stops
             }
-            if otw != nil || canAdd || dropoffInfo != nil {
+            if gate.claim() {
                 OfferAlert.post(record: saved, offer: offer, score: score, settings: settings, prefs: prefs,
-                                otw: otw, canAddToRoute: canAdd, silent: true, dropoff: dropoffInfo)
+                                otw: otw, canAddToRoute: canAdd, silent: false, dropoff: dropoffInfo)
             }
         }
+    }
+}
+
+/// Lets exactly one of two racing paths (result ready / deadline reached) post the banner.
+final class PostOnce {
+    private let lock = NSLock()
+    private var done = false
+    func claim() -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        if done { return false }
+        done = true
+        return true
     }
 }
