@@ -5,16 +5,21 @@ on:
   workflow_dispatch:
 
 jobs:
+  # Runs on Linux (always available, free) — tests the offer reading, grading,
+  # on-the-way and 4-stop logic.
   core-tests:
-    runs-on: macos-15
+    runs-on: ubuntu-latest
+    container: swift:5.10
     steps:
       - uses: actions/checkout@v4
-      - name: Run logic tests (parser, grading, on-the-way, 4-stop limit)
+      - name: Run logic tests
         working-directory: Packages/GigCore
         run: swift test
 
+  # The iPhone app itself can only be compiled on a Mac.
   build-app:
-    runs-on: macos-15
+    needs: core-tests
+    runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
       - name: Install XcodeGen
@@ -27,9 +32,10 @@ jobs:
             -destination 'generic/platform=iOS Simulator' \
             -configuration Debug CODE_SIGNING_ALLOWED=NO build
 
+  # Unsigned .ipa for sideloading from Windows (e.g. Sideloadly + a free Apple ID).
   unsigned-ipa:
-    # Unsigned .ipa for sideloading from Windows (e.g. Sideloadly + a free Apple ID).
-    runs-on: macos-15
+    needs: build-app
+    runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
       - name: Generate project

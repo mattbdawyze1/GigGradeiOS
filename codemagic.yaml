@@ -1,0 +1,26 @@
+workflows:
+  ios-check:
+    name: iOS build check
+    instance_type: mac_mini_m2
+    max_build_duration: 60
+    environment:
+      xcode: latest
+    scripts:
+      - name: Logic tests
+        script: |
+          cd Packages/GigCore
+          swift test
+      - name: Generate Xcode project
+        script: |
+          brew install xcodegen
+          xcodegen generate
+      - name: Build unsigned iPhone app (.ipa)
+        script: |
+          xcodebuild -project GigGrade.xcodeproj -scheme GigGrade -configuration Release \
+            -sdk iphoneos -destination 'generic/platform=iOS' -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" build
+          mkdir -p Payload
+          cp -R build/Build/Products/Release-iphoneos/GigGrade.app Payload/
+          zip -qry GigGrade-unsigned.ipa Payload
+    artifacts:
+      - GigGrade-unsigned.ipa

@@ -14,7 +14,7 @@ on:
 
 jobs:
   testflight:
-    runs-on: macos-15
+    runs-on: macos-latest
     env:
       TEAM: ${{ secrets.APPLE_TEAM_ID }}
       KEY_ID: ${{ secrets.ASC_KEY_ID }}

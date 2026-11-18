@@ -35,6 +35,38 @@ public final class SharedStore {
         set { save("stops", Array(newValue.prefix(TripPlanner.maxStops))) }
     }
 
+    public var notificationPrefs: NotificationPrefs {
+        get { load("notificationPrefs", NotificationPrefs.self) ?? NotificationPrefs() }
+        set { save("notificationPrefs", newValue) }
+    }
+
+    // MARK: Screen-recording timer (written by the screen-reader extension)
+
+    public var broadcastStartedAt: Date? {
+        get { load("broadcastStartedAt", Date.self) }
+        set { save("broadcastStartedAt", newValue) }
+    }
+
+    /// Last time the reader checked in. If it stops checking in, it was ended or killed by iOS.
+    public var broadcastHeartbeat: Date? {
+        get { load("broadcastHeartbeat", Date.self) }
+        set { save("broadcastHeartbeat", newValue) }
+    }
+
+    public func isBroadcasting(now: Date = Date()) -> Bool {
+        guard broadcastStartedAt != nil, let beat = broadcastHeartbeat else { return false }
+        return now.timeIntervalSince(beat) < 20
+    }
+
+    /// Shared folder both the app and the screen reader can write to.
+    public static var containerURL: URL {
+        #if os(iOS) || os(macOS)
+        if let url = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: appGroup) { return url }
+        #endif
+        return FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first
+            ?? FileManager.default.temporaryDirectory
+    }
+
     public var currentLocation: Coord? {
         get { load("location", Coord.self) }
         set { save("location", newValue) }

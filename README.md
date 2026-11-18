@@ -17,6 +17,16 @@ The app reads gig offers live from your screen through iOS screen broadcasting (
 
 > iOS doesn't let any app draw a floating card over other apps, so results come as notification banners instead of an overlay.
 
+## What's new in version 2
+- **Home tab** (was "Offers"): recording timer top-right, today's good / fair / bad counts, **double sliders** for $/hr and $/mi (red below the left handle, yellow between, green past the right handle), and a **Done** button to close the number pad.
+- **Banner content and sounds:** choose which details the offer banner shows, and pick a sound for good, fair and bad offers (4 built-in sounds + iPhone default + silent).
+- **Offers tab:** every offer is logged with a screenshot, color coded green / yellow / red, labeled with its app, and organized by day, week, month, quarter or year. Mark each **✓ Accepted** or **✕ Declined** (also from the banner).
+- **Earnings tab:** income, average $/hr, average $/mi, miles, after-cost earnings and per-app totals from offers you marked Accepted.
+- **Insights tab:** charts and plain-English takeaways (earnings, offers by color, $/hr and $/mi vs your levels, income by app, accepted vs declined) split by hour / day / week / month inside the chosen period.
+- **Route tab:** address suggestions as you type (near your location), and a fix for one tap adding both a pickup and a dropoff.
+
+> The Offers log, screenshots and timer are shared between the screen reader and the app through the App Group. With a free Apple ID (Sideloadly) iOS may strip the App Group; if the Offers tab stays empty while banners still appear, that's why. TestFlight fixes it.
+
 ## On Windows? Start here → **[WINDOWS-SETUP.md](WINDOWS-SETUP.md)**
 GitHub's cloud Macs build the app and deliver it to your iPhone via TestFlight. No Mac needed.
 

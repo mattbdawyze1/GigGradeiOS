@@ -2,11 +2,6 @@ import SwiftUI
 import UserNotifications
 import GigCore
 
-extension Notification.Name {
-    static let routeChanged = Notification.Name("giggrade.routeChanged")
-    static let openMap = Notification.Name("giggrade.openMap")
-}
-
 @main
 struct GigGradeApp: App {
     @UIApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
@@ -23,6 +18,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         let center = UNUserNotificationCenter.current()
         center.delegate = self
         OfferAlert.registerCategories()
+        SoundInstaller.install()
         center.requestAuthorization(options: [.alert, .sound]) { _, _ in }
         LocationTracker.shared.start()
         return true
@@ -34,18 +30,32 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         completionHandler([.banner, .list, .sound])
     }
 
-    // "Add to route" / "Open route map" buttons on the offer banner.
+    // Buttons on the offer banner: Accepted / Accepted + add to route / Declined. Tapping the banner opens Offers.
     func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse,
                                 withCompletionHandler completionHandler: @escaping () -> Void) {
-        let orderId = response.notification.request.content.userInfo["orderId"] as? String
-        switch response.actionIdentifier {
-        case OfferAlert.addAction:
-            if let orderId { SharedStore.shared.addPendingToRoute(orderId: orderId) }
-            NotificationCenter.default.post(name: .routeChanged, object: nil)
-        case OfferAlert.mapAction, UNNotificationDefaultActionIdentifier:
-            NotificationCenter.default.post(name: .openMap, object: nil)
-        default: break
+        let info = response.notification.request.content.userInfo
+        let id = (info["recordId"] as? String).flatMap(UUID.init(uuidString:))
+        let day = info["dayKey"] as? String
+
+        func mark(_ d: Decision) {
+            if let id, let day { OfferLog.shared.setDecision(d, id: id, dayKey: day) }
         }
+
+        switch response.actionIdentifier {
+        case OfferAlert.acceptRouteAction:
+            mark(.accepted)
+            if let id { SharedStore.shared.addPendingToRoute(orderId: id.uuidString) }
+        case OfferAlert.acceptAction:
+            mark(.accepted)
+        case OfferAlert.declineAction:
+            mark(.declined)
+        case UNNotificationDefaultActionIdentifier:
+            NotificationCenter.default.post(name: .openOffers, object: nil)
+        default:
+            break
+        }
+        NotificationCenter.default.post(name: .logChanged, object: nil)
+        NotificationCenter.default.post(name: .routeChanged, object: nil)
         completionHandler()
     }
 }

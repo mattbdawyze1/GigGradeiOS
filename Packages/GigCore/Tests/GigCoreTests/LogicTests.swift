@@ -3,7 +3,7 @@ import XCTest
 
 final class LogicTests: XCTestCase {
 
-    let settings = DriverSettings(targetHourly: 25, targetPerMile: 1.5)
+    let settings = DriverSettings(hourlyFair: 18, hourlyGood: 25, perMileFair: 1.0, perMileGood: 1.5)
 
     func testDoorDashStyleOffer() throws {
         let text = """

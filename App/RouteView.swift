@@ -29,6 +29,15 @@ final class RouteModel: ObservableObject {
 
     func clear() { store.stops = []; reload(force: true) }
 
+    func add(label: String, location: Coord, type: StopType) -> String? {
+        guard stops.count < TripPlanner.maxStops else { return "Max \(TripPlanner.maxStops) stops — finish one first." }
+        var planner = TripPlanner(stops: store.stops)
+        planner.add(Stop(type: type, label: label, location: location, orderId: UUID().uuidString))
+        store.stops = planner.stops
+        reload(force: true)
+        return nil
+    }
+
     func add(query: String, type: StopType) async -> String? {
         guard stops.count < TripPlanner.maxStops else { return "Max \(TripPlanner.maxStops) stops — finish one first." }
         guard let loc = await PlaceFinder.find(query, near: store.currentLocation) else { return "Couldn't find “\(query)”." }
@@ -86,6 +95,9 @@ struct RouteView: View {
     @State private var camera: MapCameraPosition = .automatic
     @State private var query = ""
     @State private var message: String?
+    @State private var picked: (label: String, coord: Coord)?
+    @StateObject private var completer = AddressCompleter()
+    @FocusState private var typing: Bool
     @Environment(\.scenePhase) private var scenePhase
     private let tick = Timer.publish(every: 4, on: .main, in: .common).autoconnect()
 
@@ -121,21 +133,60 @@ struct RouteView: View {
                             }
                         }
                     }
-                    Section("Add a stop by hand") {
-                        TextField("Address or place name", text: $query)
-                        HStack {
-                            Button("Add pickup") { add(.pickup) }
-                            Spacer()
-                            Button("Add dropoff") { add(.dropoff) }
+                    Section {
+                        TextField("Start typing an address or place", text: $query)
+                            .focused($typing)
+                            .textContentType(.fullStreetAddress)
+                            .autocorrectionDisabled()
+                            .onChange(of: query) { _, q in
+                                if let picked, picked.label == q { return } // just filled in from a suggestion
+                                picked = nil
+                                completer.update(query: q, near: SharedStore.shared.currentLocation)
+                            }
+                        if picked == nil {
+                            ForEach(completer.results, id: \.self) { item in
+                                Button {
+                                    choose(item)
+                                } label: {
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text(item.title).foregroundStyle(.primary)
+                                        if !item.subtitle.isEmpty {
+                                            Text(item.subtitle).font(.caption).foregroundStyle(.secondary)
+                                        }
+                                    }
+                                }
+                                .buttonStyle(.borderless)
+                            }
+                        } else {
+                            Label("Location found — choose pickup or dropoff", systemImage: "checkmark.circle.fill")
+                                .font(.footnote).foregroundStyle(.green)
                         }
+                        HStack(spacing: 12) {
+                            Button { add(.pickup) } label: {
+                                Label("Add pickup", systemImage: "bag").frame(maxWidth: .infinity)
+                            }
+                            Button { add(.dropoff) } label: {
+                                Label("Add dropoff", systemImage: "house").frame(maxWidth: .infinity)
+                            }
+                        }
+                        .buttonStyle(.bordered) // separate tap areas: one tap = one stop
                         if let message { Text(message).foregroundStyle(.red).font(.footnote) }
+                    } header: {
+                        Text("Add a stop by hand")
+                    } footer: {
+                        Text("Suggestions are based on what you type and where you are.")
                     }
                 }
-                .frame(height: 320)
+                .frame(height: 380)
             }
             .navigationTitle("Route")
             .navigationBarTitleDisplayMode(.inline)
+            .scrollDismissesKeyboard(.interactively)
             .toolbar {
+                ToolbarItemGroup(placement: .keyboard) {
+                    Spacer()
+                    Button("Done") { typing = false }.fontWeight(.semibold)
+                }
                 ToolbarItem(placement: .topBarLeading) { Button("Clear") { model.clear() } }
                 ToolbarItem(placement: .topBarTrailing) { Button("Navigate") { model.navigate() } }
             }
@@ -150,9 +201,74 @@ struct RouteView: View {
     private func add(_ type: StopType) {
         let q = query.trimmingCharacters(in: .whitespaces)
         guard !q.isEmpty else { return }
+        typing = false
+        if let picked {
+            message = model.add(label: picked.label, location: picked.coord, type: type)
+            if message == nil { reset() }
+            return
+        }
         Task {
             message = await model.add(query: q, type: type)
-            if message == nil { query = "" }
+            if message == nil { reset() }
         }
+    }
+
+    private func choose(_ item: MKLocalSearchCompletion) {
+        Task {
+            if let found = await completer.resolve(item) {
+                picked = found
+                query = found.label
+                message = nil
+            } else {
+                message = "Couldn't find that place. Try another suggestion."
+            }
+        }
+    }
+
+    private func reset() {
+        query = ""
+        picked = nil
+        completer.results = []
+    }
+}
+
+/// Live address suggestions while typing, biased toward your current location.
+@MainActor
+final class AddressCompleter: NSObject, ObservableObject, MKLocalSearchCompleterDelegate {
+    @Published var results: [MKLocalSearchCompletion] = []
+    private let completer = MKLocalSearchCompleter()
+
+    override init() {
+        super.init()
+        completer.delegate = self
+        completer.resultTypes = [.address, .pointOfInterest]
+    }
+
+    func update(query: String, near: Coord?) {
+        if let near {
+            completer.region = MKCoordinateRegion(center: near.cl, latitudinalMeters: 40_000, longitudinalMeters: 40_000)
+        }
+        let q = query.trimmingCharacters(in: .whitespaces)
+        if q.count < 3 {
+            completer.cancel()
+            results = []
+        } else {
+            completer.queryFragment = q
+        }
+    }
+
+    nonisolated func completerDidUpdateResults(_ completer: MKLocalSearchCompleter) {
+        let found = Array(completer.results.prefix(6))
+        Task { @MainActor in self.results = found }
+    }
+
+    nonisolated func completer(_ completer: MKLocalSearchCompleter, didFailWithError error: Error) {}
+
+    /// Turns a tapped suggestion into an exact map location.
+    func resolve(_ item: MKLocalSearchCompletion) async -> (label: String, coord: Coord)? {
+        let request = MKLocalSearch.Request(completion: item)
+        guard let mapItem = try? await MKLocalSearch(request: request).start().mapItems.first else { return nil }
+        let label = item.subtitle.isEmpty ? item.title : "\(item.title), \(item.subtitle)"
+        return (label, Coord(mapItem.placemark.coordinate))
     }
 }
