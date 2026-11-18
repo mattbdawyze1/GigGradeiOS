@@ -96,6 +96,21 @@ public struct TripPlanner {
 
         public var good: Bool { verdict == .onTheWay || verdict == .nearFinal }
 
+        /// Short form for the banner (fits on one line).
+        public var shortMessage: String {
+            let f = { (x: Double?) in String(format: "%.1f", x ?? 0) }
+            switch verdict {
+            case .noActiveTrip: return ""
+            case .unknownLocation: return "Route check: couldn't locate"
+            case .tooManyStops: return "Route full (\(TripPlanner.maxStops) stops)"
+            case .nearFinal where fromHere: return "✅ ON THE WAY · ends \(f(dropoffToFinalMi)) mi from you"
+            case .nearFinal: return "✅ ON THE WAY · ends \(f(dropoffToFinalMi)) mi from last stop"
+            case .onTheWay: return "✅ CLOSE BY · only +\(f(addedMiles)) mi"
+            case .offRoute where fromHere: return "❌ OFF ROUTE · ends \(f(dropoffToFinalMi)) mi from you"
+            case .offRoute: return "❌ OFF ROUTE · +\(f(addedMiles)) mi extra"
+            }
+        }
+
         public var message: String {
             let f = { (x: Double?) in String(format: "%.1f", x ?? 0) }
             let perMile = stackedPerMile.map { String(format: " → $%.2f per extra mile", $0) } ?? ""

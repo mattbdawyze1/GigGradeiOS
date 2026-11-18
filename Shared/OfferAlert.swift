@@ -37,56 +37,42 @@ enum OfferAlert {
 
     private static func mark(_ level: OfferCategory?) -> String {
         switch level {
-        case .good: return " ✅"
-        case .fair: return " ⚠️"
-        case .bad: return " ❌"
+        case .good: return "✅"
+        case .fair: return "⚠️"
+        case .bad: return "❌"
         case nil: return ""
         }
     }
 
-    static func title(_ o: Offer, _ s: Score, _ p: NotificationPrefs) -> String {
-        var head: [String] = []
-        if p.showCategory { head.append("\(s.category.dot) \(s.category.label)") }
-        if p.showGrade { head.append(s.grade) }
-        var what: [String] = []
-        if p.showAppName { what.append(o.app.rawValue) }
-        if p.showPay { what.append(String(format: "$%.2f", o.pay)) }
-        let parts = [head.joined(separator: " "), what.joined(separator: " ")].filter { !$0.isEmpty }
-        return parts.isEmpty ? "New offer" : parts.joined(separator: " · ")
+    /// Text for each banner item (empty when it doesn't apply to this offer).
+    static func values(_ o: Offer, _ s: Score, _ settings: DriverSettings, _ p: NotificationPrefs,
+                       _ otw: TripPlanner.OnTheWay?, _ dropoff: DropoffInfo?) -> [BannerItem: String] {
+        var v: [BannerItem: String] = [:]
+        v[.color] = "\(s.category.dot) \(s.category.label)"
+        v[.grade] = s.grade
+        v[.app] = o.app == .unknown ? "" : o.app.rawValue
+        v[.pay] = String(format: "$%.2f", o.pay)
+        if let h = s.dollarsPerHour {
+            var t = String(format: "$%.2f/hr", h) + mark(s.hourlyLevel)
+            if p.showPctOfTarget, let pct = s.hourlyPctOfTarget { t += " \(pct)%" }
+            v[.hourly] = t
+        }
+        if let m = s.dollarsPerMile {
+            var t = String(format: "$%.2f/mi", m) + mark(s.mileLevel)
+            if p.showPctOfTarget, let pct = s.milePctOfTarget { t += " \(pct)%" }
+            v[.perMile] = t
+        }
+        if let mi = o.miles { v[.miles] = String(format: "%.1f mi", mi) }
+        if let mn = o.minutes { v[.minutes] = "\(mn) min" }
+        if let net = s.netPay { v[.net] = String(format: "net $%.2f", net) }
+        if let otw { v[.verdict] = otw.shortMessage }
+        if let dropoff { v[.dropoff] = dropoff.line }
+        return v
     }
 
-    static func body(_ o: Offer, _ s: Score, _ settings: DriverSettings, _ p: NotificationPrefs,
-                     _ otw: TripPlanner.OnTheWay?) -> String {
-        var lines: [String] = []
-        if p.showHourly, let h = s.dollarsPerHour {
-            var line = String(format: "$%.2f/hr", h)
-            if p.showPctOfTarget, let pct = s.hourlyPctOfTarget { line += " · \(pct)% of $\(String(format: "%.0f", settings.hourlyGood))" }
-            lines.append(line + mark(s.hourlyLevel))
-        }
-        if p.showPerMile, let m = s.dollarsPerMile {
-            var line = String(format: "$%.2f/mi", m)
-            if p.showPctOfTarget, let pct = s.milePctOfTarget { line += " · \(pct)% of $\(String(format: "%.2f", settings.perMileGood))" }
-            lines.append(line + mark(s.mileLevel))
-        }
-        var trip: [String] = []
-        if p.showMilesMinutes {
-            if let mi = o.miles { trip.append(String(format: "%.1f mi", mi)) }
-            if let mn = o.minutes { trip.append("\(mn) min") }
-        }
-        if p.showNet, let net = s.netPay {
-            trip.append(String(format: "after costs $%.2f", net) + (s.netPerHour.map { String(format: " ($%.0f/hr)", $0) } ?? ""))
-        }
-        if !trip.isEmpty { lines.append(trip.joined(separator: " · ")) }
-        if p.showOnTheWay, let otw { lines.append(otw.message) }
-        return lines.joined(separator: "\n")
-    }
-
-    /// - Parameter dropoff: where the dropoff is, e.g. "Halsey St, Port Jefferson Station", plus how it was found.
-    static func body(_ o: Offer, _ s: Score, _ settings: DriverSettings, _ p: NotificationPrefs,
-                     _ otw: TripPlanner.OnTheWay?, dropoff: DropoffInfo?) -> String {
-        var text = body(o, s, settings, p, otw)
-        if p.showDropoff, let dropoff { text += (text.isEmpty ? "" : "\n") + dropoff.line }
-        return text
+    static func content(_ o: Offer, _ s: Score, _ settings: DriverSettings, _ p: NotificationPrefs,
+                        _ otw: TripPlanner.OnTheWay?, dropoff: DropoffInfo? = nil) -> (title: String, subtitle: String, body: String) {
+        p.effectiveLayout.compose(values(o, s, settings, p, otw, dropoff))
     }
 
     static func sound(_ choice: SoundChoice) -> UNNotificationSound? {
@@ -103,8 +89,10 @@ enum OfferAlert {
                      prefs: NotificationPrefs, otw: TripPlanner.OnTheWay?, canAddToRoute: Bool, silent: Bool,
                      dropoff: DropoffInfo? = nil) {
         let c = UNMutableNotificationContent()
-        c.title = title(offer, score, prefs)
-        c.body = body(offer, score, settings, prefs, otw, dropoff: dropoff)
+        let text = content(offer, score, settings, prefs, otw, dropoff: dropoff)
+        c.title = text.title
+        c.subtitle = text.subtitle   // its own line, so line 2 is always visible
+        c.body = text.body
         c.categoryIdentifier = canAddToRoute ? routeCategory : basicCategory
         c.interruptionLevel = .active
         c.relevanceScore = 1

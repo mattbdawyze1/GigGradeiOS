@@ -168,42 +168,50 @@ struct BroadcastPicker: UIViewRepresentable {
     func updateUIView(_ uiView: RPSystemBroadcastPickerView, context: Context) {}
 }
 
-/// Choose what the offer banner shows and which sound plays for good / fair / bad.
+/// Arrange what the offer banner shows on each line, and which sound plays for good / fair / bad.
 struct NotificationSettingsView: View {
     @State private var p = SharedStore.shared.notificationPrefs
+    @State private var layout = SharedStore.shared.notificationPrefs.effectiveLayout
     private let settings = SharedStore.shared.settings
+
+    private var sample: (title: String, subtitle: String, body: String) {
+        var prefs = p
+        prefs.layout = layout
+        let o = Offer(app: .uber, pay: 10.06, miles: 9.0, minutes: 33, pickupText: nil, dropoffText: nil, rawText: "")
+        return OfferAlert.content(o, OfferScorer.score(o, settings), settings, prefs,
+                                  TripPlanner.OnTheWay(verdict: .nearFinal, addedMiles: 3.1, dropoffToFinalMi: 1.3),
+                                  dropoff: DropoffInfo(place: "Smithtown Byp, Smithtown", estimated: false, milesFromYou: 6.2))
+    }
 
     var body: some View {
         Form {
-            Section("Preview") {
-                let o = Offer(app: .doordash, pay: 9.75, miles: 6.4, minutes: 28, pickupText: nil, dropoffText: nil, rawText: "")
-                let sc = OfferScorer.score(o, settings)
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(OfferAlert.title(o, sc, p)).font(.subheadline.weight(.semibold))
-                    Text(OfferAlert.body(o, sc, settings, p, TripPlanner.OnTheWay(verdict: .onTheWay, addedMiles: 0.8, stackedPerMile: 12.19),
-                                         dropoff: DropoffInfo(place: "Halsey St, Port Jefferson Station", estimated: true, milesFromYou: 2.1)))
-                        .font(.footnote)
-                }
-                .padding(10)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(RoundedRectangle(cornerRadius: 14).fill(Color.secondary.opacity(0.12)))
+            Section {
+                bannerPreview(collapsed: true)
+                bannerPreview(collapsed: false)
+            } header: {
+                Text("Preview")
+            } footer: {
+                Text("Top: how the banner pops up (iOS cuts it off after a few lines). Bottom: pulled down.")
             }
 
-            Section("Banner title") {
-                Toggle("Color (Good / Fair / Bad)", isOn: $p.showCategory)
-                Toggle("Letter grade", isOn: $p.showGrade)
-                Toggle("App name", isOn: $p.showAppName)
-                Toggle("Pay", isOn: $p.showPay)
+            Section {
+                ForEach(layout.fullOrder) { item in
+                    Picker(item.label, selection: Binding(
+                        get: { layout.slot(item) },
+                        set: { layout.set(item, $0) }
+                    )) {
+                        ForEach(BannerSlot.allCases) { Text($0.label).tag($0) }
+                    }
+                }
+                NavigationLink("Change the order within a line") { BannerOrderView(layout: $layout) }
+                Toggle("Add % of your target to $/hr and $/mi", isOn: $p.showPctOfTarget)
+                Button("Reset to standard layout") { layout = .standard }
+            } header: {
+                Text("Arrange the banner")
+            } footer: {
+                Text("Items on the same line appear side by side, separated by “ · ”. Keep the most important ones on lines 1–2 so they're never cut off.")
             }
-            Section("Banner details") {
-                Toggle("$ per hour", isOn: $p.showHourly)
-                Toggle("$ per mile", isOn: $p.showPerMile)
-                Toggle("% of your target", isOn: $p.showPctOfTarget)
-                Toggle("Miles and minutes", isOn: $p.showMilesMinutes)
-                Toggle("Pay after costs", isOn: $p.showNet)
-                Toggle("On-the-way check", isOn: $p.showOnTheWay)
-                Toggle("Dropoff location", isOn: $p.showDropoff)
-            }
+
             Section {
                 soundRow("Good offers", .good, $p.goodSound)
                 soundRow("Fair offers", .fair, $p.fairSound)
@@ -216,10 +224,36 @@ struct NotificationSettingsView: View {
         }
         .navigationTitle("Banner and sounds")
         .navigationBarTitleDisplayMode(.inline)
-        .onChange(of: p) { _, newValue in
-            SharedStore.shared.notificationPrefs = newValue
-            Task { await Cloud.shared.schedulePushState() } // so real-offer banners follow your choices
+        .onChange(of: layout) { _, _ in save() }
+        .onChange(of: p) { _, _ in save() }
+    }
+
+    private func save() {
+        var prefs = p
+        prefs.layout = layout
+        SharedStore.shared.notificationPrefs = prefs
+        Task { await Cloud.shared.schedulePushState() } // so real-offer banners follow your layout
+    }
+
+    /// Looks like an iOS banner; collapsed shows ~4 lines like iOS does.
+    private func bannerPreview(collapsed: Bool) -> some View {
+        let t = sample
+        return HStack(alignment: .top, spacing: 10) {
+            RoundedRectangle(cornerRadius: 7).fill(Color.green.opacity(0.8)).frame(width: 30, height: 30)
+                .overlay(Text("A+").font(.caption2.weight(.bold)).foregroundStyle(.white))
+            VStack(alignment: .leading, spacing: 1) {
+                Text(t.title).font(.subheadline.weight(.semibold)).lineLimit(1)
+                if !t.subtitle.isEmpty {
+                    Text(t.subtitle).font(.subheadline.weight(.semibold)).lineLimit(collapsed ? 1 : nil)
+                }
+                if !t.body.isEmpty {
+                    Text(t.body).font(.subheadline).lineLimit(collapsed ? (t.subtitle.isEmpty ? 3 : 2) : nil)
+                }
+            }
+            Spacer(minLength: 0)
         }
+        .padding(10)
+        .background(RoundedRectangle(cornerRadius: 16).fill(Color.secondary.opacity(0.15)))
     }
 
     private func soundRow(_ title: String, _ c: OfferCategory, _ value: Binding<SoundChoice>) -> some View {
@@ -231,6 +265,35 @@ struct NotificationSettingsView: View {
             Button { SoundPreview.play(value.wrappedValue) } label: { Image(systemName: "play.circle") }
                 .buttonStyle(.borderless)
         }
+    }
+}
+
+/// Drag items to set their order within each line.
+struct BannerOrderView: View {
+    @Binding var layout: BannerLayout
+
+    var body: some View {
+        List {
+            Section {
+                ForEach(layout.fullOrder) { item in
+                    HStack {
+                        Text(item.label)
+                        Spacer()
+                        Text(layout.slot(item).label).font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+                .onMove { from, to in
+                    var o = layout.fullOrder
+                    o.move(fromOffsets: from, toOffset: to)
+                    layout.order = o
+                }
+            } footer: {
+                Text("Drag the handles. Items show left-to-right in this order on whichever line they're on.")
+            }
+        }
+        .environment(\.editMode, .constant(.active))
+        .navigationTitle("Order")
+        .navigationBarTitleDisplayMode(.inline)
     }
 }
 

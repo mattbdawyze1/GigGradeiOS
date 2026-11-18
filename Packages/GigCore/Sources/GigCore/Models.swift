@@ -173,6 +173,8 @@ public struct NotificationPrefs: Codable, Equatable {
     public var showNet = true
     public var showOnTheWay = true
     public var showDropoff = false
+    /// Custom banner arrangement; nil = the standard layout, minus anything switched off above.
+    public var layout: BannerLayout?
     public var goodSound: SoundChoice = .chime
     public var fairSound: SoundChoice = .ding
     public var badSound: SoundChoice = .buzz
@@ -181,7 +183,7 @@ public struct NotificationPrefs: Codable, Equatable {
 
     private enum CodingKeys: String, CodingKey {
         case showGrade, showCategory, showAppName, showPay, showHourly, showPerMile, showPctOfTarget
-        case showMilesMinutes, showNet, showOnTheWay, showDropoff, goodSound, fairSound, badSound
+        case showMilesMinutes, showNet, showOnTheWay, showDropoff, layout, goodSound, fairSound, badSound
     }
 
     /// Tolerates missing keys, so adding options later never wipes your choices.
@@ -196,7 +198,25 @@ public struct NotificationPrefs: Codable, Equatable {
         showPctOfTarget = b(.showPctOfTarget, d.showPctOfTarget); showMilesMinutes = b(.showMilesMinutes, d.showMilesMinutes)
         showNet = b(.showNet, d.showNet); showOnTheWay = b(.showOnTheWay, d.showOnTheWay)
         showDropoff = b(.showDropoff, d.showDropoff)
+        layout = (try? c.decodeIfPresent(BannerLayout.self, forKey: .layout)) ?? nil
         goodSound = s(.goodSound, d.goodSound); fairSound = s(.fairSound, d.fairSound); badSound = s(.badSound, d.badSound)
+    }
+
+    /// The layout actually used: your custom one, or the standard one respecting the old on/off switches.
+    public var effectiveLayout: BannerLayout {
+        if let layout { return layout }
+        var l = BannerLayout.standard
+        if !showCategory { l.set(.color, .off) }
+        if !showGrade { l.set(.grade, .off) }
+        if !showAppName { l.set(.app, .off) }
+        if !showPay { l.set(.pay, .off) }
+        if !showHourly { l.set(.hourly, .off) }
+        if !showPerMile { l.set(.perMile, .off) }
+        if !showMilesMinutes { l.set(.miles, .off); l.set(.minutes, .off) }
+        if !showNet { l.set(.net, .off) }
+        if !showOnTheWay { l.set(.verdict, .off) }
+        if showDropoff { l.set(.dropoff, .more) }
+        return l
     }
 
     public func sound(for c: OfferCategory) -> SoundChoice {
