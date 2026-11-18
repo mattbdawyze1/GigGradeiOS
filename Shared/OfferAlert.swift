@@ -4,6 +4,19 @@ import GigCore
 
 /// iOS doesn't allow drawing over other apps, so the grade arrives as a notification
 /// banner on top of the gig app. Pull the banner down for Accepted / Declined / Add to route.
+/// The "📍 Dropoff" line on the banner.
+struct DropoffInfo {
+    var place: String          // "Garden Ct & School Dr, Port Jefferson Station"
+    var estimated: Bool        // true = worked out from the DoorDash map
+    var milesFromYou: Double?
+
+    var line: String {
+        var s = estimated ? "📍 Dropoff ≈ \(place) (from map)" : "📍 Dropoff: \(place)"
+        if let m = milesFromYou { s += String(format: " · %.1f mi from you", m) }
+        return s
+    }
+}
+
 enum OfferAlert {
     static let basicCategory = "OFFER"
     static let routeCategory = "OFFER_ROUTE"
@@ -68,10 +81,11 @@ enum OfferAlert {
         return lines.joined(separator: "\n")
     }
 
+    /// - Parameter dropoff: where the dropoff is, e.g. "Halsey St, Port Jefferson Station", plus how it was found.
     static func body(_ o: Offer, _ s: Score, _ settings: DriverSettings, _ p: NotificationPrefs,
-                     _ otw: TripPlanner.OnTheWay?, dropoffEstimated: Bool) -> String {
+                     _ otw: TripPlanner.OnTheWay?, dropoff: DropoffInfo?) -> String {
         var text = body(o, s, settings, p, otw)
-        if dropoffEstimated, p.showOnTheWay, otw != nil { text += "\n📍 Customer location estimated from the map" }
+        if p.showDropoff, let dropoff { text += (text.isEmpty ? "" : "\n") + dropoff.line }
         return text
     }
 
@@ -87,10 +101,10 @@ enum OfferAlert {
 
     static func post(record: OfferRecord, offer: Offer, score: Score, settings: DriverSettings,
                      prefs: NotificationPrefs, otw: TripPlanner.OnTheWay?, canAddToRoute: Bool, silent: Bool,
-                     dropoffEstimated: Bool = false) {
+                     dropoff: DropoffInfo? = nil) {
         let c = UNMutableNotificationContent()
         c.title = title(offer, score, prefs)
-        c.body = body(offer, score, settings, prefs, otw, dropoffEstimated: dropoffEstimated)
+        c.body = body(offer, score, settings, prefs, otw, dropoff: dropoff)
         c.categoryIdentifier = canAddToRoute ? routeCategory : basicCategory
         c.interruptionLevel = .active
         c.relevanceScore = 1

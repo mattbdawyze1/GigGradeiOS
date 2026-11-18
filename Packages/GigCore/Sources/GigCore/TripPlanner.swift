@@ -85,11 +85,13 @@ public struct TripPlanner {
         public var dropoffToFinalMi: Double?
         public var stackedPerMile: Double?   // offer pay ÷ the EXTRA miles it costs you
         public var insertion: Insertion?
+        /// True when there was no route, so distances are measured from where you are.
+        public var fromHere: Bool
 
         public init(verdict: Verdict, addedMiles: Double? = nil, dropoffToFinalMi: Double? = nil,
-                    stackedPerMile: Double? = nil, insertion: Insertion? = nil) {
+                    stackedPerMile: Double? = nil, insertion: Insertion? = nil, fromHere: Bool = false) {
             self.verdict = verdict; self.addedMiles = addedMiles; self.dropoffToFinalMi = dropoffToFinalMi
-            self.stackedPerMile = stackedPerMile; self.insertion = insertion
+            self.stackedPerMile = stackedPerMile; self.insertion = insertion; self.fromHere = fromHere
         }
 
         public var good: Bool { verdict == .onTheWay || verdict == .nearFinal }
@@ -101,8 +103,12 @@ public struct TripPlanner {
             case .noActiveTrip: return "No active route — graded on its own."
             case .unknownLocation: return "Couldn't locate pickup/dropoff — on-the-way check skipped."
             case .tooManyStops: return "Route already has \(TripPlanner.maxStops) stops — finish one first."
-            case .onTheWay: return "✅ ON THE WAY: only +\(f(addedMiles)) mi extra\(perMile)"
-            case .nearFinal: return "✅ ENDS NEAR YOUR FINAL STOP: \(f(dropoffToFinalMi)) mi away (+\(f(addedMiles)) mi)\(perMile)"
+            // .nearFinal = ends near your final stop (or near you) -> ON THE WAY
+            // .onTheWay  = only a small detour                      -> CLOSE BY
+            case .nearFinal where fromHere: return "✅ ON THE WAY: ends \(f(dropoffToFinalMi)) mi from you"
+            case .nearFinal: return "✅ ON THE WAY: ends \(f(dropoffToFinalMi)) mi from your final stop (+\(f(addedMiles)) mi)\(perMile)"
+            case .onTheWay: return "✅ CLOSE BY: only +\(f(addedMiles)) mi extra\(perMile)"
+            case .offRoute where fromHere: return "❌ OFF ROUTE: ends \(f(dropoffToFinalMi)) mi from you"
             case .offRoute: return "❌ OFF ROUTE: +\(f(addedMiles)) mi extra, ends \(f(dropoffToFinalMi)) mi from your final stop"
             }
         }
@@ -110,7 +116,13 @@ public struct TripPlanner {
 
     public func checkOnTheWay(origin: Coord?, pickup: Stop?, dropoff: Stop?, pay: Double,
                               settings s: DriverSettings) -> OnTheWay {
-        guard let lastStop = stops.last else { return OnTheWay(verdict: .noActiveTrip) }
+        guard let lastStop = stops.last else {
+            // No route: is the dropoff close to where you are now?
+            guard let origin, let dropoff else { return OnTheWay(verdict: .unknownLocation) }
+            let away = Geo.roadMiles(origin, dropoff.location)
+            return OnTheWay(verdict: away <= s.onTheWayRadiusMi ? .nearFinal : .offRoute,
+                            dropoffToFinalMi: away, fromHere: true)
+        }
         guard let origin, let pickup, let dropoff else { return OnTheWay(verdict: .unknownLocation) }
         guard canAdd(2), let ins = bestInsertion(origin: origin, pickup: pickup, dropoff: dropoff) else {
             return OnTheWay(verdict: .tooManyStops)
@@ -119,8 +131,8 @@ public struct TripPlanner {
         let toFinal = Geo.roadMiles(dropoff.location, lastStop.location)
         let perMile = added > 0.1 ? pay / added : nil
         let v: Verdict
-        if added <= s.maxDetourMi { v = .onTheWay }
-        else if toFinal <= s.onTheWayRadiusMi { v = .nearFinal }
+        if toFinal <= s.onTheWayRadiusMi { v = .nearFinal }   // ON THE WAY (checked first)
+        else if added <= s.maxDetourMi { v = .onTheWay }     // CLOSE BY
         else { v = .offRoute }
         return OnTheWay(verdict: v, addedMiles: added, dropoffToFinalMi: toFinal, stackedPerMile: perMile, insertion: ins)
     }

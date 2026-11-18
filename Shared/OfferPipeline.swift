@@ -56,7 +56,6 @@ final class OfferPipeline {
         let settings = store.settings
         let prefs = store.notificationPrefs
         let score = OfferScorer.score(offer, settings)
-        let route = store.stops
 
         // 1) Log it (with a screenshot) and show the grade immediately.
         var record = OfferRecord(date: now, app: offer.app, pay: offer.pay, miles: offer.miles, minutes: offer.minutes,
@@ -71,7 +70,7 @@ final class OfferPipeline {
         Task { await Cloud.shared.queueOffer(id: record.id, dayKey: dayKey) }
 
         OfferAlert.post(record: record, offer: offer, score: score, settings: settings, prefs: prefs,
-                        otw: route.isEmpty ? nil : TripPlanner.OnTheWay(verdict: .unknownLocation),
+                        otw: nil, // the on-the-way verdict arrives a second later, once addresses are located
                         canAddToRoute: false, silent: false)
 
         // 2) Locate pickup/dropoff, then update the same banner with the on-the-way verdict.
@@ -102,9 +101,8 @@ final class OfferPipeline {
             }
 
             let planner = TripPlanner(stops: store.stops)
-            let otw = planner.stops.isEmpty ? nil
-                : planner.checkOnTheWay(origin: store.currentLocation ?? near, pickup: p, dropoff: d,
-                                        pay: offer.pay, settings: settings)
+            let otw: TripPlanner.OnTheWay? = planner.checkOnTheWay(origin: store.currentLocation ?? near, pickup: p,
+                                                                   dropoff: d, pay: offer.pay, settings: settings)
             if let note = otw?.message {
                 log.update(id: saved.id, dayKey: OfferLog.dayKey(saved.date)) { $0.routeNote = note }
             }
@@ -113,12 +111,31 @@ final class OfferPipeline {
                 store.savePending(orderId: orderId, pickup: p, dropoff: d) // also sent to the cloud with the offer
                 canAdd = planner.canAdd(2)
             }
+            // "📍 Dropoff" line: Uber's cross streets as written, or the street name of the DoorDash map estimate.
+            var dropoffInfo: DropoffInfo?
+            if let d {
+                let here = store.currentLocation
+                let miles = here.map { Geo.roadMiles($0, d.location) }
+                var place = offer.dropoffText ?? d.label
+                if estimated {
+                    let named = await PlaceFinder.describe(d.location)
+                    place = named ?? "customer pin"
+                }
+                dropoffInfo = DropoffInfo(place: place, estimated: estimated, milesFromYou: miles)
+                if estimated {
+                    log.update(id: saved.id, dayKey: OfferLog.dayKey(saved.date)) { $0.dropoffText = "≈ \(place) (from map)" }
+                }
+            } else if let text = offer.dropoffText {
+                dropoffInfo = DropoffInfo(place: text, estimated: false, milesFromYou: nil)
+            }
+            guard self.currentKey == offer.key else { return }
+
             if otw?.message != nil || p != nil || d != nil {
                 await Cloud.shared.queueOffer(id: saved.id, dayKey: OfferLog.dayKey(saved.date)) // route note + stops
             }
-            if otw != nil || canAdd {
+            if otw != nil || canAdd || dropoffInfo != nil {
                 OfferAlert.post(record: saved, offer: offer, score: score, settings: settings, prefs: prefs,
-                                otw: otw, canAddToRoute: canAdd, silent: true, dropoffEstimated: estimated)
+                                otw: otw, canAddToRoute: canAdd, silent: true, dropoff: dropoffInfo)
             }
         }
     }

@@ -65,7 +65,8 @@ public enum OfferParser {
         if t.contains("spark") || t.contains("walmart") { return .spark }
         if t.contains("lyft") { return .lyft }
         if t.contains("amazon") || t.contains("flex") { return .amazonFlex }
-        if t.contains("uber") || t.contains("includes expected tip") { return .uber }
+        if t.contains("uber") || t.contains("includes expected tip") || t.contains("(incl. tip)")
+            || t.contains("trip radar") || (t.contains("exclusive") && t.contains("delivery")) { return .uber }
         return .unknown
     }
 
@@ -81,6 +82,9 @@ public enum OfferParser {
         if app == .doordash, let dash = doorDashPlaces(lines) {
             pickup = dash.pickup
             dropoff = dash.dropoff // usually nil: DoorDash only shows the customer on the map
+        } else if app == .uber, let u = uberPlaces(lines) {
+            pickup = u.pickup
+            dropoff = u.dropoff
         }
         return Offer(
             app: app,
@@ -91,6 +95,39 @@ public enum OfferParser {
             dropoffText: dropoff,
             rawText: text
         )
+    }
+
+    // MARK: Uber layout
+    //   $5.04
+    //   Guaranteed (incl. tip)
+    //   20 min (3.9 mi) total
+    //   Slurp Ramen  |  Panera (4959 Nesconset Hwy )  |  Five Guys (5122 Nesconset Hwy.) NY - 1330   <- store (may wrap)
+    //   Garden Ct & School Dr, Port Jefferson   <- dropoff: cross streets or "street, town" (may wrap)
+    //   Station
+    //   Accept | Match
+
+    static func uberPlaces(_ lines: [String]) -> (pickup: String?, dropoff: String?)? {
+        guard let start = lines.firstIndex(where: { $0.lowercased().contains("total") && milesRx.contains($0) }) else { return nil }
+        var block: [String] = []
+        for line in lines[(start + 1)...] {
+            let low = line.lowercased()
+            if low == "accept" || low == "match" || low.hasPrefix("accept ") || low.hasPrefix("match ") { break }
+            if line.count <= 2 { continue } // stray map-label fragments at the screen edges
+            block.append(line)
+        }
+        guard !block.isEmpty else { return nil }
+        // The dropoff starts at the first cross-street line ("A & B"), otherwise at the first
+        // "street, town" line after the store name.
+        let split = block.firstIndex(where: { $0.contains("&") })
+            ?? block.indices.dropFirst().first(where: { block[$0].contains(",") })
+        let storeLines = split.map { Array(block[..<$0]) } ?? block
+        let dropLines = split.map { Array(block[$0...]) } ?? []
+        var pickup = storeLines.joined(separator: " ")
+        // "Panera (4959 Nesconset Hwy )" -> "Panera 4959 Nesconset Hwy" (better map search)
+        pickup = pickup.replacingOccurrences(of: "(", with: " ").replacingOccurrences(of: ")", with: " ")
+        pickup = pickup.split(separator: " ").joined(separator: " ")
+        let dropoff = dropLines.joined(separator: " ").split(separator: " ").joined(separator: " ")
+        return (pickup.isEmpty ? nil : pickup, dropoff.isEmpty ? nil : dropoff)
     }
 
     // MARK: DoorDash layout

@@ -172,6 +172,7 @@ public struct NotificationPrefs: Codable, Equatable {
     public var showMilesMinutes = true
     public var showNet = true
     public var showOnTheWay = true
+    public var showDropoff = false
     public var goodSound: SoundChoice = .chime
     public var fairSound: SoundChoice = .ding
     public var badSound: SoundChoice = .buzz
@@ -180,7 +181,7 @@ public struct NotificationPrefs: Codable, Equatable {
 
     private enum CodingKeys: String, CodingKey {
         case showGrade, showCategory, showAppName, showPay, showHourly, showPerMile, showPctOfTarget
-        case showMilesMinutes, showNet, showOnTheWay, goodSound, fairSound, badSound
+        case showMilesMinutes, showNet, showOnTheWay, showDropoff, goodSound, fairSound, badSound
     }
 
     /// Tolerates missing keys, so adding options later never wipes your choices.
@@ -194,6 +195,7 @@ public struct NotificationPrefs: Codable, Equatable {
         showHourly = b(.showHourly, d.showHourly); showPerMile = b(.showPerMile, d.showPerMile)
         showPctOfTarget = b(.showPctOfTarget, d.showPctOfTarget); showMilesMinutes = b(.showMilesMinutes, d.showMilesMinutes)
         showNet = b(.showNet, d.showNet); showOnTheWay = b(.showOnTheWay, d.showOnTheWay)
+        showDropoff = b(.showDropoff, d.showDropoff)
         goodSound = s(.goodSound, d.goodSound); fairSound = s(.fairSound, d.fairSound); badSound = s(.badSound, d.badSound)
     }
 

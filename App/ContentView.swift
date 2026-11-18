@@ -64,12 +64,12 @@ struct HomeView: View {
                 }
 
                 Section {
-                    numberRow("Max extra miles to add an order", $s.maxDetourMi)
-                    numberRow("OK if it ends within (mi) of final stop", $s.onTheWayRadiusMi)
+                    numberRow("On the way if it ends within (mi) of your final stop", $s.onTheWayRadiusMi)
+                    numberRow("Close by if it adds no more than (mi)", $s.maxDetourMi)
                 } header: {
                     Text("Stacking another offer")
                 } footer: {
-                    Text("When you already have stops on your route, new offers from any app are checked against it.")
+                    Text("ON THE WAY: ends near your final stop (or near you when your route is empty). CLOSE BY: only a small detour. Otherwise OFF ROUTE.")
                 }
 
                 Section {
@@ -180,7 +180,8 @@ struct NotificationSettingsView: View {
                 let sc = OfferScorer.score(o, settings)
                 VStack(alignment: .leading, spacing: 4) {
                     Text(OfferAlert.title(o, sc, p)).font(.subheadline.weight(.semibold))
-                    Text(OfferAlert.body(o, sc, settings, p, TripPlanner.OnTheWay(verdict: .onTheWay, addedMiles: 0.8, stackedPerMile: 12.19)))
+                    Text(OfferAlert.body(o, sc, settings, p, TripPlanner.OnTheWay(verdict: .onTheWay, addedMiles: 0.8, stackedPerMile: 12.19),
+                                         dropoff: DropoffInfo(place: "Halsey St, Port Jefferson Station", estimated: true, milesFromYou: 2.1)))
                         .font(.footnote)
                 }
                 .padding(10)
@@ -201,6 +202,7 @@ struct NotificationSettingsView: View {
                 Toggle("Miles and minutes", isOn: $p.showMilesMinutes)
                 Toggle("Pay after costs", isOn: $p.showNet)
                 Toggle("On-the-way check", isOn: $p.showOnTheWay)
+                Toggle("Dropoff location", isOn: $p.showDropoff)
             }
             Section {
                 soundRow("Good offers", .good, $p.goodSound)
