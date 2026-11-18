@@ -27,6 +27,20 @@ The app reads gig offers live from your screen through iOS screen broadcasting (
 
 > The Offers log, screenshots and timer are shared between the screen reader and the app through the App Group. With a free Apple ID (Sideloadly) iOS may strip the App Group; if the Offers tab stays empty while banners still appear, that's why. TestFlight fixes it.
 
+## Version 3: cloud sync (Supabase)
+The screen reader and the app now share data through your own Supabase project, so everything works
+even when iOS doesn't give a sideloaded install shared storage:
+- the screen reader loads your targets, banner choices, route and location from the cloud;
+- every real offer (and its screenshot) is uploaded and appears in Offers / Earnings / Insights;
+- ✓ / ✕ choices, "Accepted + add to route" and the recording timer all sync.
+Changes made without signal are queued on the phone and sent later.
+
+Setup (single user, no login): run `supabase/setup.sql` in Supabase → SQL Editor, then add
+`SUPABASE_URL` and `SUPABASE_SECRET_KEY` in Codemagic → Environment variables (group **supabase**).
+Codemagic writes them into the app at build time — never put them in `Shared/SupabaseSecrets.swift`
+in GitHub (the repo is public), and don't share the built .ipa (it contains the secret key).
+If the key ever leaks, create a new one in Supabase and rebuild.
+
 ## On Windows? Start here → **[WINDOWS-SETUP.md](WINDOWS-SETUP.md)**
 GitHub's cloud Macs build the app and deliver it to your iPhone via TestFlight. No Mac needed.
 

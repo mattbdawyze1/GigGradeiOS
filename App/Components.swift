@@ -115,8 +115,8 @@ struct RangeRow: View {
 
 @MainActor
 final class LogModel: ObservableObject {
-    @Published var period: Period { didSet { reload() } }
-    @Published var anchor = Date() { didSet { reload() } }
+    @Published var period: Period { didSet { reload(); refreshFromCloud(force: true) } }
+    @Published var anchor = Date() { didSet { reload(); refreshFromCloud(force: true) } }
     @Published private(set) var records: [OfferRecord] = []
     @Published private(set) var previous: [OfferRecord] = []
 
@@ -161,14 +161,33 @@ final class LogModel: ObservableObject {
     func setDecision(_ d: Decision, for r: OfferRecord) {
         let newValue: Decision = r.decision == d ? .pending : d // tap again to undo
         OfferLog.shared.setDecision(newValue, id: r.id, dayKey: OfferLog.dayKey(r.date, calendar: calendar))
+        Task { await Cloud.shared.queueDecision(newValue, id: r.id) }
         NotificationCenter.default.post(name: .logChanged, object: nil)
         reload()
     }
 
     func delete(_ r: OfferRecord) {
         OfferLog.shared.delete(id: r.id, dayKey: OfferLog.dayKey(r.date, calendar: calendar))
+        Task { await Cloud.shared.queueDelete(id: r.id, screenshotFile: r.screenshotFile) }
         NotificationCenter.default.post(name: .logChanged, object: nil)
         reload()
+    }
+
+    private var lastCloudPull = Date.distantPast
+    private var pulling = false
+
+    /// Downloads offers for the visible period (and the one before, for comparisons) from the cloud.
+    func refreshFromCloud(force: Bool = false) {
+        guard Cloud.isConfigured, !pulling, force || Date().timeIntervalSince(lastCloudPull) > 15 else { return }
+        pulling = true
+        lastCloudPull = Date()
+        let current = interval
+        let prev = period.interval(containing: period.shift(anchor, by: -1, calendar: calendar), calendar: calendar)
+        Task {
+            await Cloud.shared.pullOffers(in: DateInterval(start: prev.start, end: max(current.end, prev.end)))
+            self.pulling = false
+            self.reload()
+        }
     }
 }
 
@@ -209,10 +228,14 @@ struct AutoReload: ViewModifier {
 
     func body(content: Content) -> some View {
         content
-            .onAppear { model.reload() }
-            .onReceive(tick) { _ in model.reload() }
+            .onAppear { model.reload(); model.refreshFromCloud(force: true) }
+            .onReceive(tick) { _ in
+                model.reload()
+                model.refreshFromCloud()
+                Task { await Cloud.shared.pullBroadcastIntoStore() }
+            }
             .onReceive(NotificationCenter.default.publisher(for: .logChanged)) { _ in model.reload() }
-            .onChange(of: phase) { _, p in if p == .active { model.reload() } }
+            .onChange(of: phase) { _, p in if p == .active { model.reload(); model.refreshFromCloud(force: true) } }
     }
 }
 

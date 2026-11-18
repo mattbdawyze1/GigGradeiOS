@@ -112,4 +112,36 @@ final class V2Tests: XCTestCase {
         let o = try XCTUnwrap(OfferParser.parse(text))
         XCTAssertEqual(o.pay, 8.40, accuracy: 0.001)
     }
+
+    func testCloudMergeKeepsNewest() {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let log = OfferLog(directory: dir)
+        let d = Date()
+        var local = record(10, 4, 20, .good, .accepted, at: d)
+        local.updatedAt = d.addingTimeInterval(100)
+        local.screenshotFile = "a.jpg"
+        log.append(local)
+
+        var olderCloud = local
+        olderCloud.decision = .pending
+        olderCloud.updatedAt = d
+        olderCloud.screenshotFile = nil
+        let fromCloud = record(7, 3, 15, .fair, .pending, .doordash, at: d)
+        log.merge([olderCloud, fromCloud])
+
+        let recs = log.records(dayKey: OfferLog.dayKey(d))
+        XCTAssertEqual(recs.count, 2)
+        XCTAssertEqual(recs.first { $0.id == local.id }?.decision, .accepted) // local change was newer
+        XCTAssertNotNil(recs.first { $0.id == fromCloud.id })
+
+        var newerCloud = local
+        newerCloud.decision = .declined
+        newerCloud.updatedAt = d.addingTimeInterval(200)
+        newerCloud.screenshotFile = nil
+        log.merge([newerCloud])
+        let after = log.record(id: local.id, dayKey: OfferLog.dayKey(d))
+        XCTAssertEqual(after?.decision, .declined)
+        XCTAssertEqual(after?.screenshotFile, "a.jpg") // keeps the screenshot we already had
+        try? FileManager.default.removeItem(at: dir)
+    }
 }

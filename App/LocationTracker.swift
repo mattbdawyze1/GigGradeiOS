@@ -6,6 +6,7 @@ import GigCore
 final class LocationTracker: NSObject, CLLocationManagerDelegate {
     static let shared = LocationTracker()
     private let manager = CLLocationManager()
+    private var lastCloudPush = Date.distantPast
 
     func start() {
         manager.delegate = self
@@ -37,5 +38,9 @@ final class LocationTracker: NSObject, CLLocationManagerDelegate {
     func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
         guard let l = locations.last else { return }
         SharedStore.shared.currentLocation = Coord(l.coordinate)
+        if Date().timeIntervalSince(lastCloudPush) > 60 {
+            lastCloudPush = Date()
+            Task { await Cloud.shared.schedulePushState() } // the screen reader uses it for on-the-way checks
+        }
     }
 }

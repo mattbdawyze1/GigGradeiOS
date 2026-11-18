@@ -25,9 +25,14 @@ final class RouteModel: ObservableObject {
         planner.remove(id: s.id)
         store.stops = planner.stops
         reload(force: true)
+        Task { await Cloud.shared.schedulePushState() }
     }
 
-    func clear() { store.stops = []; reload(force: true) }
+    func clear() {
+        store.stops = []
+        reload(force: true)
+        Task { await Cloud.shared.schedulePushState() }
+    }
 
     func add(label: String, location: Coord, type: StopType) -> String? {
         guard stops.count < TripPlanner.maxStops else { return "Max \(TripPlanner.maxStops) stops — finish one first." }
@@ -35,6 +40,7 @@ final class RouteModel: ObservableObject {
         planner.add(Stop(type: type, label: label, location: location, orderId: UUID().uuidString))
         store.stops = planner.stops
         reload(force: true)
+        Task { await Cloud.shared.schedulePushState() }
         return nil
     }
 
@@ -45,6 +51,7 @@ final class RouteModel: ObservableObject {
         planner.add(Stop(type: type, label: query, location: loc, orderId: UUID().uuidString))
         store.stops = planner.stops
         reload(force: true)
+        Task { await Cloud.shared.schedulePushState() }
         return nil
     }
 

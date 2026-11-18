@@ -63,7 +63,33 @@ public final class OfferLog {
     }
 
     public func setDecision(_ decision: Decision, id: UUID, dayKey: String) {
-        update(id: id, dayKey: dayKey) { $0.decision = decision }
+        update(id: id, dayKey: dayKey) { $0.decision = decision; $0.updatedAt = Date() }
+    }
+
+    /// Adds/refreshes records that came from the cloud. A local copy that changed more recently wins.
+    public func merge(_ incoming: [OfferRecord], calendar: Calendar = .current) {
+        let byDay = Dictionary(grouping: incoming) { Self.dayKey($0.date, calendar: calendar) }
+        for (day, recs) in byDay {
+            modify(day) { list in
+                for r in recs {
+                    if let i = list.firstIndex(where: { $0.id == r.id }) {
+                        let local = list[i]
+                        if (local.updatedAt ?? .distantPast) <= (r.updatedAt ?? .distantPast) {
+                            var newer = r
+                            if newer.screenshotFile == nil { newer.screenshotFile = local.screenshotFile }
+                            list[i] = newer
+                        }
+                    } else {
+                        list.append(r)
+                    }
+                }
+                list.sort { $0.date < $1.date }
+            }
+        }
+    }
+
+    public func record(id: UUID, dayKey: String) -> OfferRecord? {
+        records(dayKey: dayKey).first { $0.id == id }
     }
 
     public func delete(id: UUID, dayKey: String) {

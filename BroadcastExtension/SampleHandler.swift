@@ -15,6 +15,7 @@ class SampleHandler: RPBroadcastSampleHandler {
 
     private var lastScan = Date.distantPast
     private var lastHeartbeat = Date.distantPast
+    private var lastCloudBeat = Date.distantPast
     private let scanInterval: TimeInterval = 1.0
     private let ciContext = CIContext(options: [.cacheIntermediates: false])
     private let store = SharedStore.shared
@@ -22,8 +23,14 @@ class SampleHandler: RPBroadcastSampleHandler {
     override func broadcastStarted(withSetupInfo setupInfo: [String: NSObject]?) {
         OfferAlert.registerCategories()
         OfferPipeline.shared.reset()
-        store.broadcastStartedAt = Date()
-        store.broadcastHeartbeat = Date()
+        let start = Date()
+        store.broadcastStartedAt = start
+        store.broadcastHeartbeat = start
+        Task {
+            await Cloud.shared.pullSettingsIntoStore(force: true) // your targets + banner choices
+            await Cloud.shared.broadcastStarted(at: start)
+            await Cloud.shared.flush()
+        }
     }
 
     override func processSampleBuffer(_ sampleBuffer: CMSampleBuffer, with sampleBufferType: RPSampleBufferType) {
@@ -32,6 +39,13 @@ class SampleHandler: RPBroadcastSampleHandler {
         if now.timeIntervalSince(lastHeartbeat) >= 5 {
             lastHeartbeat = now
             store.broadcastHeartbeat = now // lets the app's timer know we're still recording
+        }
+        if now.timeIntervalSince(lastCloudBeat) >= 15 {
+            lastCloudBeat = now
+            Task {
+                await Cloud.shared.heartbeat()               // timer + retry queued uploads
+                await Cloud.shared.pullSettingsIntoStore()   // picks up setting changes (every ~60 s)
+            }
         }
         guard now.timeIntervalSince(lastScan) >= scanInterval,
               let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
@@ -108,6 +122,14 @@ class SampleHandler: RPBroadcastSampleHandler {
     override func broadcastFinished() {
         store.broadcastStartedAt = nil
         store.broadcastHeartbeat = nil
+        // Give the cloud a few seconds to hear that recording stopped, and to send anything queued.
+        let done = DispatchSemaphore(value: 0)
+        Task {
+            await Cloud.shared.broadcastEnded()
+            await Cloud.shared.flush()
+            done.signal()
+        }
+        _ = done.wait(timeout: .now() + 4)
         UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: [OfferAlert.requestId])
     }
 }

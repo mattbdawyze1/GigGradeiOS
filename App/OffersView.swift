@@ -111,6 +111,7 @@ struct OfferDetailView: View {
     @ObservedObject var model: LogModel
     @Environment(\.dismiss) private var dismiss
     @State private var zoom = false
+    @State private var cloudShot: UIImage?
 
     private var record: OfferRecord? { model.records.first { $0.id == recordId } }
 
@@ -118,8 +119,19 @@ struct OfferDetailView: View {
         NavigationStack {
             if let r = record {
                 List {
+                    if let file = r.screenshotFile, cloudShot == nil,
+                       UIImage(contentsOfFile: OfferLog.shared.screenshotURL(file).path) == nil {
+                        Section("Screenshot") {
+                            HStack { ProgressView(); Text("Loading screenshot…").foregroundStyle(.secondary) }
+                                .task {
+                                    if let url = await Cloud.shared.downloadScreenshot(file: file) {
+                                        cloudShot = UIImage(contentsOfFile: url.path)
+                                    }
+                                }
+                        }
+                    }
                     if let file = r.screenshotFile,
-                       let img = UIImage(contentsOfFile: OfferLog.shared.screenshotURL(file).path) {
+                       let img = cloudShot ?? UIImage(contentsOfFile: OfferLog.shared.screenshotURL(file).path) {
                         Section("Screenshot") {
                             Image(uiImage: img)
                                 .resizable().scaledToFit()

@@ -3,9 +3,40 @@ import Foundation
 /// Data shared between the app and the screen-reading extension through an App Group.
 /// The group ID must match the App Group set in both targets' entitlements (project.yml).
 public final class SharedStore {
-    /// Read from Info.plist (set once in project.yml via APP_GROUP), so app + extension always agree.
-    public static let appGroup: String =
-        (Bundle.main.object(forInfoDictionaryKey: "GigGradeAppGroup") as? String) ?? "group.com.giggrade.app"
+    /// The App Group (shared storage) both the app and the screen reader use.
+    /// Sideloading tools may rename the group when they re-sign the app (e.g. adding your team ID),
+    /// so we read the real name from the app's own provisioning profile when there is one, and fall
+    /// back to the name in Info.plist (TestFlight / App Store builds).
+    public static let appGroup: String = {
+        let planned = (Bundle.main.object(forInfoDictionaryKey: "GigGradeAppGroup") as? String) ?? "group.com.giggrade.app"
+        let provisioned = provisionedAppGroups()
+        if provisioned.isEmpty || provisioned.contains(planned) { return planned }
+        // Prefer a renamed version of our group, otherwise the first one we're allowed to use.
+        return provisioned.first(where: { $0.hasPrefix(planned) || $0.contains("giggrade") }) ?? provisioned[0]
+    }()
+
+    /// App Groups listed in the embedded provisioning profile (present in sideloaded/dev installs).
+    public static func provisionedAppGroups(bundle: Bundle = .main) -> [String] {
+        guard let url = bundle.url(forResource: "embedded", withExtension: "mobileprovision"),
+              let data = try? Data(contentsOf: url) else { return [] }
+        let text = String(decoding: data, as: UTF8.self) // signed wrapper around a plain XML plist
+        guard let start = text.range(of: "<?xml"),
+              let end = text.range(of: "</plist>", range: start.upperBound..<text.endIndex) else { return [] }
+        let xml = Data(text[start.lowerBound..<end.upperBound].utf8)
+        guard let plist = try? PropertyListSerialization.propertyList(from: xml, options: [], format: nil) as? [String: Any],
+              let entitlements = plist["Entitlements"] as? [String: Any],
+              let groups = entitlements["com.apple.security.application-groups"] as? [String] else { return [] }
+        return groups
+    }
+
+    /// True when iOS actually gave us the shared folder (i.e. app and screen reader can share data).
+    public static var sharedStorageAvailable: Bool {
+        #if os(iOS)
+        return FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: appGroup) != nil
+        #else
+        return true
+        #endif
+    }
     public static let shared = SharedStore()
 
     private let d: UserDefaults
@@ -55,7 +86,7 @@ public final class SharedStore {
 
     public func isBroadcasting(now: Date = Date()) -> Bool {
         guard broadcastStartedAt != nil, let beat = broadcastHeartbeat else { return false }
-        return now.timeIntervalSince(beat) < 20
+        return now.timeIntervalSince(beat) < 45
     }
 
     /// Shared folder both the app and the screen reader can write to.
@@ -80,6 +111,11 @@ public final class SharedStore {
         all = all.filter { $0.value.at.timeIntervalSinceNow > -3600 } // keep the last hour
         all[orderId] = Pending(pickup: pickup, dropoff: dropoff, at: Date())
         save("pending", all)
+    }
+
+    public func pendingStops(orderId: String) -> (pickup: Stop, dropoff: Stop)? {
+        guard let p = (load("pending", [String: Pending].self) ?? [:])[orderId] else { return nil }
+        return (p.pickup, p.dropoff)
     }
 
     /// Moves a pending offer into the route (cheapest order). Returns false if it can't fit.

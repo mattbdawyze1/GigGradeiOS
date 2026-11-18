@@ -5,11 +5,26 @@ workflows:
     max_build_duration: 60
     environment:
       xcode: latest
+      groups:
+        - supabase   # SUPABASE_URL, SUPABASE_SECRET_KEY
     scripts:
       - name: Logic tests
         script: |
           cd Packages/GigCore
           swift test
+      - name: Add Supabase keys (from Codemagic environment variables, never stored in GitHub)
+        script: |
+          if [ -z "$SUPABASE_URL" ] || [ -z "$SUPABASE_SECRET_KEY" ]; then
+            echo "WARNING: Supabase variables missing - building WITHOUT cloud sync"
+            exit 0
+          fi
+          cat > Shared/SupabaseSecrets.swift <<EOF
+          enum SupabaseSecrets {
+              static let url = "$SUPABASE_URL"
+              static let secretKey = "$SUPABASE_SECRET_KEY"
+          }
+          EOF
+          echo "Cloud sync keys added for $SUPABASE_URL"
       - name: Generate Xcode project
         script: |
           brew install xcodegen

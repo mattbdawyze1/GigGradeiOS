@@ -63,6 +63,8 @@ final class OfferPipeline {
                                  dollarsPerMile: score.dollarsPerMile)
         if let jpeg = screenshot?() { record.screenshotFile = log.saveScreenshot(jpeg, id: record.id) }
         log.append(record)
+        let dayKey = OfferLog.dayKey(record.date)
+        Task { await Cloud.shared.queueOffer(id: record.id, dayKey: dayKey) }
 
         OfferAlert.post(record: record, offer: offer, score: score, settings: settings, prefs: prefs,
                         otw: route.isEmpty ? nil : TripPlanner.OnTheWay(verdict: .unknownLocation),
@@ -89,6 +91,9 @@ final class OfferPipeline {
             if let p, let d, planner.canAdd(2) {
                 store.savePending(orderId: orderId, pickup: p, dropoff: d)
                 canAdd = true
+            }
+            if otw?.message != nil || canAdd {
+                await Cloud.shared.queueOffer(id: saved.id, dayKey: OfferLog.dayKey(saved.date)) // route note + stops
             }
             if otw != nil || canAdd {
                 OfferAlert.post(record: saved, offer: offer, score: score, settings: settings, prefs: prefs,

@@ -81,6 +81,14 @@ struct HomeView: View {
                 }
 
                 Section {
+                    ConnectionStatus()
+                } header: {
+                    Text("Connection to screen reader")
+                } footer: {
+                    Text("The screen reader gets your targets and banner settings, and sends offers to the Offers tab, through shared storage or cloud sync. Either one is enough.")
+                }
+
+                Section {
                     HStack {
                         Spacer()
                         BroadcastPicker().frame(width: 72, height: 72)
@@ -101,7 +109,10 @@ struct HomeView: View {
                 }
             }
             .navigationBarTitleDisplayMode(.inline)
-            .onChange(of: s) { _, newValue in SharedStore.shared.settings = newValue }
+            .onChange(of: s) { _, newValue in
+                SharedStore.shared.settings = newValue
+                Task { await Cloud.shared.schedulePushState() } // so the screen reader uses your targets
+            }
         }
         .autoReload(today)
     }
@@ -203,7 +214,10 @@ struct NotificationSettingsView: View {
         }
         .navigationTitle("Banner and sounds")
         .navigationBarTitleDisplayMode(.inline)
-        .onChange(of: p) { _, newValue in SharedStore.shared.notificationPrefs = newValue }
+        .onChange(of: p) { _, newValue in
+            SharedStore.shared.notificationPrefs = newValue
+            Task { await Cloud.shared.schedulePushState() } // so real-offer banners follow your choices
+        }
     }
 
     private func soundRow(_ title: String, _ c: OfferCategory, _ value: Binding<SoundChoice>) -> some View {
@@ -214,6 +228,44 @@ struct NotificationSettingsView: View {
             }
             Button { SoundPreview.play(value.wrappedValue) } label: { Image(systemName: "play.circle") }
                 .buttonStyle(.borderless)
+        }
+    }
+}
+
+/// Shows whether the app and the screen reader can share data, and when the reader last checked in.
+struct ConnectionStatus: View {
+    var body: some View {
+        TimelineView(.periodic(from: .now, by: 2)) { ctx in
+            let store = SharedStore.shared
+            VStack(alignment: .leading, spacing: 6) {
+                if SharedStore.sharedStorageAvailable {
+                    Label("Shared storage ready", systemImage: "checkmark.circle.fill").foregroundStyle(.green)
+                } else {
+                    Label("Shared storage not available", systemImage: "xmark.octagon.fill").foregroundStyle(.red)
+                    Text(Cloud.isConfigured
+                         ? "No problem — cloud sync (Supabase) passes your settings and offers between the app and the screen reader."
+                         : "iOS didn't give this install an App Group. Set up cloud sync (Supabase) or install through TestFlight.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                if let beat = store.broadcastHeartbeat {
+                    let ago = Int(ctx.date.timeIntervalSince(beat))
+                    if ago < 20 {
+                        Label("Screen reader connected (checked in \(ago)s ago)", systemImage: "dot.radiowaves.left.and.right")
+                            .foregroundStyle(.green)
+                    } else {
+                        Label("Screen reader last seen \(beat.formatted(date: .omitted, time: .shortened))", systemImage: "clock")
+                            .foregroundStyle(.secondary)
+                    }
+                } else {
+                    Label("Screen reader not seen yet — start a broadcast to test", systemImage: "questionmark.circle")
+                        .foregroundStyle(.secondary)
+                }
+                let cloud = Cloud.status()
+                Label(cloud.message, systemImage: cloud.ok ? "icloud.fill" : "icloud.slash")
+                    .foregroundStyle(cloud.ok ? Color.green : (Cloud.isConfigured ? Color.orange : Color.secondary))
+                Text(SharedStore.appGroup).font(.caption2).foregroundStyle(.tertiary)
+            }
+            .font(.subheadline)
         }
     }
 }

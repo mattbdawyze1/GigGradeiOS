@@ -117,15 +117,17 @@ public struct OfferRecord: Codable, Identifiable, Equatable, Hashable {
     public var routeNote: String?        // on-the-way result shown in the banner
     public var screenshotFile: String?   // file name inside the log's Screenshots folder
     public var decision: Decision
+    /// Last time this record changed (used to merge with the cloud copy).
+    public var updatedAt: Date?
 
     public init(id: UUID = UUID(), date: Date = Date(), app: GigApp, pay: Double, miles: Double?, minutes: Int?,
                 pickupText: String?, dropoffText: String?, grade: String, category: OfferCategory,
                 dollarsPerHour: Double?, dollarsPerMile: Double?, routeNote: String? = nil,
-                screenshotFile: String? = nil, decision: Decision = .pending) {
+                screenshotFile: String? = nil, decision: Decision = .pending, updatedAt: Date? = nil) {
         self.id = id; self.date = date; self.app = app; self.pay = pay; self.miles = miles; self.minutes = minutes
         self.pickupText = pickupText; self.dropoffText = dropoffText; self.grade = grade; self.category = category
         self.dollarsPerHour = dollarsPerHour; self.dollarsPerMile = dollarsPerMile; self.routeNote = routeNote
-        self.screenshotFile = screenshotFile; self.decision = decision
+        self.screenshotFile = screenshotFile; self.decision = decision; self.updatedAt = updatedAt ?? date
     }
 
     public func netPay(costPerMile: Double) -> Double? { miles.map { pay - $0 * costPerMile } }
