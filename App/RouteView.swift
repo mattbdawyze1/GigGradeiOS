@@ -28,6 +28,25 @@ final class RouteModel: ObservableObject {
         Task { await Cloud.shared.schedulePushState() }
     }
 
+    /// Drag-to-reorder. Returns a message if the move isn't allowed.
+    func move(from: IndexSet, to: Int) -> String? {
+        var newOrder = stops
+        newOrder.move(fromOffsets: from, toOffset: to)
+        var planner = TripPlanner(stops: store.stops)
+        guard planner.reorder(newOrder) else {
+            return "A dropoff can't come before its pickup."
+        }
+        store.stops = planner.stops
+        reload(force: true)
+        Task { await Cloud.shared.schedulePushState() }
+        return nil
+    }
+
+    func remove(at offsets: IndexSet) {
+        let doomed = offsets.filter { $0 < stops.count }.map { stops[$0] }
+        for stop in doomed { complete(stop) }
+    }
+
     func clear() {
         store.stops = []
         reload(force: true)
@@ -82,18 +101,24 @@ final class RouteModel: ObservableObject {
                          stops.count, TripPlanner.maxStops, meters / 1609.34, Int(seconds / 60))
     }
 
-    /// Whole route in Google Maps (supports multiple stops); falls back to Apple Maps.
-    func navigate() {
-        guard let last = stops.last else { return }
+    /// Google Maps takes up to 10 points including your start, so 9 stops per hand-off.
+    static let googleMapsMaxStops = 9
+
+    /// Route in Google Maps (first 9 stops if there are more). Returns true if some stops were left out.
+    @discardableResult
+    func navigate() -> Bool {
+        guard !stops.isEmpty else { return false }
+        let batch = Array(stops.prefix(Self.googleMapsMaxStops))
         let ll = { (c: Coord) in "\(c.lat),\(c.lng)" }
-        let waypoints = stops.dropLast().map { ll($0.location) }.joined(separator: "|")
+        let waypoints = batch.dropLast().map { ll($0.location) }.joined(separator: "|")
         var comps = URLComponents(string: "https://www.google.com/maps/dir/")!
         comps.queryItems = [
             URLQueryItem(name: "api", value: "1"),
             URLQueryItem(name: "travelmode", value: "driving"),
-            URLQueryItem(name: "destination", value: ll(last.location)),
+            URLQueryItem(name: "destination", value: ll(batch.last!.location)),
         ] + (waypoints.isEmpty ? [] : [URLQueryItem(name: "waypoints", value: waypoints)])
         if let url = comps.url { UIApplication.shared.open(url) }
+        return stops.count > batch.count
     }
 }
 
@@ -104,6 +129,8 @@ struct RouteView: View {
     @State private var message: String?
     @State private var picked: (label: String, coord: Coord)?
     @StateObject private var completer = AddressCompleter()
+    @State private var editMode: EditMode = .inactive
+    @State private var showBatchNote = false
     @FocusState private var typing: Bool
     @Environment(\.scenePhase) private var scenePhase
     private let tick = Timer.publish(every: 4, on: .main, in: .common).autoconnect()
@@ -129,15 +156,34 @@ struct RouteView: View {
 
                 List {
                     Section {
-                        Text(model.summary).font(.subheadline)
                         ForEach(Array(model.stops.enumerated()), id: \.element.id) { i, s in
                             HStack {
                                 Image(systemName: s.type == .pickup ? "bag.fill" : "house.fill")
                                     .foregroundStyle(s.type == .pickup ? .blue : .green)
                                 Text("\(i + 1). \(s.label)").lineLimit(1)
                                 Spacer()
-                                Button("Done") { model.complete(s) }.buttonStyle(.bordered)
+                                if editMode == .inactive {
+                                    Button("Done") { model.complete(s) }.buttonStyle(.bordered)
+                                }
                             }
+                        }
+                        .onMove { from, to in message = model.move(from: from, to: to) }
+                        .onDelete { model.remove(at: $0) }
+                    } header: {
+                        HStack {
+                            Text(model.summary)
+                            Spacer()
+                            if model.stops.count > 1 {
+                                Button(editMode == .active ? "Done" : "Reorder") {
+                                    withAnimation { editMode = editMode == .active ? .inactive : .active }
+                                }
+                                .font(.subheadline.weight(.semibold))
+                                .textCase(nil)
+                            }
+                        }
+                    } footer: {
+                        if editMode == .active {
+                            Text("Drag ≡ to change the order. Swipe left to remove a stop. A dropoff can't go before its own pickup.")
                         }
                     }
                     Section {
@@ -184,6 +230,7 @@ struct RouteView: View {
                         Text("Suggestions are based on what you type and where you are.")
                     }
                 }
+                .environment(\.editMode, $editMode)
                 .frame(height: 380)
             }
             .navigationTitle("Route")
@@ -195,8 +242,15 @@ struct RouteView: View {
                     Button("Done") { typing = false }.fontWeight(.semibold)
                 }
                 ToolbarItem(placement: .topBarLeading) { Button("Clear") { model.clear() } }
-                ToolbarItem(placement: .topBarTrailing) { Button("Navigate") { model.navigate() } }
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Navigate") { showBatchNote = model.navigate() }
+                }
             }
+        }
+        .alert("First 9 stops sent", isPresented: $showBatchNote) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text("Google Maps takes up to 9 stops at a time. After you finish a few, tap Navigate again for the rest.")
         }
         .onAppear { model.reload(force: true) }
         .onReceive(tick) { _ in model.reload() }

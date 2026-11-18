@@ -13,7 +13,7 @@ The app reads gig offers live from your screen through iOS screen broadcasting (
    - ❌ **OFF ROUTE**
 
    It also shows **$ per *extra* mile**, the real value of stacking an order.
-3. **Route map.** Pull the banner down and tap **Add to route**. The pickup and dropoff go into the cheapest order. The **Route** tab draws you and your stops on Apple Maps road routes, with a **max of 4 stops**. **Navigate** opens the whole multi-stop route in Google Maps.
+3. **Route map.** Pull the banner down and tap **Add to route**. The pickup and dropoff go into the cheapest order. The **Route** tab draws you and your stops on Apple Maps road routes, with a **max of 9 stops** (drag to reorder) — the most Google Maps can navigate in one go. **Navigate** opens the whole multi-stop route in Google Maps.
 
 > iOS doesn't let any app draw a floating card over other apps, so results come as notification banners instead of an overlay.
 
@@ -96,7 +96,7 @@ GitHub's cloud Macs build the app and deliver it to your iPhone via TestFlight. 
 | `Shared/PlaceFinder.swift` | Address/business name → map coordinates |
 | `Packages/GigCore/…/OfferParser.swift` | Reads pay / miles / minutes / pickup / dropoff |
 | `Packages/GigCore/…/OfferScorer.swift` | $/hr, $/mi, net, letter grade |
-| `Packages/GigCore/…/TripPlanner.swift` | 4-stop route, cheapest insertion, on-the-way verdict |
+| `Packages/GigCore/…/TripPlanner.swift` | 9-stop route, cheapest insertion, drag reorder, on-the-way verdict |
 | `Packages/GigCore/…/SharedStore.swift` | Settings and route shared between app and extension |
 | `App/RouteView.swift` | Map, road routes, stop list, Google Maps hand-off |
 | `App/ContentView.swift` | Settings, start-broadcast button, sample test |

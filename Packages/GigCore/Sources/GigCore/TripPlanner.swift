@@ -23,7 +23,7 @@ public enum Geo {
 /// The active route (pickups + dropoffs from ANY app), max 4 stops,
 /// and the "does this new offer fit on my way?" logic.
 public struct TripPlanner {
-    public static let maxStops = 4
+    public static let maxStops = 9
 
     public private(set) var stops: [Stop]
 
@@ -38,6 +38,29 @@ public struct TripPlanner {
     }
 
     public mutating func remove(id: UUID) { stops.removeAll { $0.id == id } }
+
+    /// Every order's pickup must come before its dropoff.
+    public static func isValidOrder(_ stops: [Stop]) -> Bool {
+        var picked = Set<String>()
+        let ordersWithPickup = Set(stops.filter { $0.type == .pickup }.map(\.orderId))
+        for s in stops {
+            switch s.type {
+            case .pickup: picked.insert(s.orderId)
+            case .dropoff:
+                if ordersWithPickup.contains(s.orderId) && !picked.contains(s.orderId) { return false }
+            }
+        }
+        return true
+    }
+
+    /// Your own order (drag to reorder). Rejected if a dropoff would come before its pickup.
+    @discardableResult
+    public mutating func reorder(_ newOrder: [Stop]) -> Bool {
+        guard newOrder.count == stops.count, Set(newOrder.map(\.id)) == Set(stops.map(\.id)),
+              Self.isValidOrder(newOrder) else { return false }
+        stops = newOrder
+        return true
+    }
 
     public struct Insertion: Equatable {
         public var order: [Stop]

@@ -85,14 +85,30 @@ final class LogicTests: XCTestCase {
         XCTAssertEqual(bad.verdict, .offRoute)
     }
 
-    func testMaxFourStops() {
+    func testMaxStops() {
         let l = Coord(lat: 0, lng: 0)
         var planner = TripPlanner()
-        for i in 0..<4 { XCTAssertTrue(planner.add(Stop(type: .pickup, label: "s\(i)", location: l, orderId: "\(i)"))) }
-        XCTAssertFalse(planner.add(Stop(type: .dropoff, label: "x", location: l, orderId: "9")))
-        let r = planner.checkOnTheWay(origin: l, pickup: Stop(type: .pickup, label: "p", location: l, orderId: "5"),
-                                      dropoff: Stop(type: .dropoff, label: "d", location: l, orderId: "5"),
+        for i in 0..<TripPlanner.maxStops { XCTAssertTrue(planner.add(Stop(type: .pickup, label: "s\(i)", location: l, orderId: "\(i)"))) }
+        XCTAssertEqual(TripPlanner.maxStops, 9)
+        XCTAssertFalse(planner.add(Stop(type: .dropoff, label: "x", location: l, orderId: "99")))
+        let r = planner.checkOnTheWay(origin: l, pickup: Stop(type: .pickup, label: "p", location: l, orderId: "98"),
+                                      dropoff: Stop(type: .dropoff, label: "d", location: l, orderId: "98"),
                                       pay: 5, settings: settings)
         XCTAssertEqual(r.verdict, .tooManyStops)
+    }
+
+    func testDragReorderKeepsPickupBeforeDropoff() {
+        let l = Coord(lat: 0, lng: 0)
+        let a1 = Stop(type: .pickup, label: "A pickup", location: l, orderId: "A")
+        let a2 = Stop(type: .dropoff, label: "A dropoff", location: l, orderId: "A")
+        let b1 = Stop(type: .pickup, label: "B pickup", location: l, orderId: "B")
+        let b2 = Stop(type: .dropoff, label: "B dropoff", location: l, orderId: "B")
+        let typed = Stop(type: .dropoff, label: "typed address", location: l, orderId: "C") // no pickup -> can go anywhere
+        var planner = TripPlanner(stops: [a1, a2, b1, b2, typed])
+        XCTAssertTrue(planner.reorder([b1, a1, typed, b2, a2]))
+        XCTAssertEqual(planner.stops.map(\.label), ["B pickup", "A pickup", "typed address", "B dropoff", "A dropoff"])
+        XCTAssertFalse(planner.reorder([a2, a1, b1, b2, typed]))       // A dropoff before A pickup
+        XCTAssertEqual(planner.stops.first?.label, "B pickup")          // unchanged after a rejected move
+        XCTAssertFalse(planner.reorder([b1, a1]))                       // can't drop stops by reordering
     }
 }
