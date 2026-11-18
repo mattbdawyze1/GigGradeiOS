@@ -58,7 +58,8 @@ public enum OfferParser {
 
     public static func detectApp(_ text: String) -> GigApp {
         let t = text.lowercased()
-        if t.contains("doordash") || t.contains("dasher") { return .doordash }
+        if t.contains("doordash") || t.contains("dasher") || t.contains("incl. tips") || t.contains("customer dropoff")
+            || t.contains("multiple dropoffs") || t.contains("high pay for") { return .doordash }
         if t.contains("grubhub") { return .grubhub }
         if t.contains("instacart") || t.contains("batch") { return .instacart }
         if t.contains("spark") || t.contains("walmart") { return .spark }
@@ -74,15 +75,67 @@ public enum OfferParser {
             .map { $0.trimmingCharacters(in: .whitespaces) }
             .filter { !$0.isEmpty }
         guard let pay = pickPay(lines), pay > 0, pay <= 500 else { return nil }
+        let app = detectApp(text)
+        var pickup = pickAddress(lines, isPickup: true)
+        var dropoff = pickAddress(lines, isPickup: false)
+        if app == .doordash, let dash = doorDashPlaces(lines) {
+            pickup = dash.pickup
+            dropoff = dash.dropoff // usually nil: DoorDash only shows the customer on the map
+        }
         return Offer(
-            app: detectApp(text),
+            app: app,
             pay: pay,
             miles: pickMiles(lines),
             minutes: pickMinutes(lines, now: now, calendar: calendar),
-            pickupText: pickAddress(lines, isPickup: true),
-            dropoffText: pickAddress(lines, isPickup: false),
+            pickupText: pickup,
+            dropoffText: dropoff,
             rawText: text
         )
+    }
+
+    // MARK: DoorDash layout
+    //   $6.00 incl. tips
+    //   2 stops (4.6 mi) • 17 min
+    //   McDonald's                                   <- store name
+    //   5136 Nesconset Highway, Port Jefferson       <- address (may wrap)
+    //   Station, 11776 NY
+    //   [Pick up 2 orders]
+    //   Customer dropoff | Multiple dropoffs (2 stops)
+
+    static let stopsLine = Rx(#"\b\d+\s+stops?\b"#)
+    static let dashDropCue = Rx(#"(customer dropoff|multiple dropoffs|pick\s?up \d+ orders?)"#)
+    static let addressEnd = Rx(#"(\b\d{5}\b|\b[A-Z]{2}$)"#, ci: false)
+
+    static func doorDashPlaces(_ lines: [String]) -> (pickup: String?, dropoff: String?)? {
+        guard let start = lines.firstIndex(where: { stopsLine.contains($0) && milesRx.contains($0) }) else { return nil }
+        var name: String?
+        var address: [String] = []
+        var i = start + 1
+        while i < lines.count {
+            let line = lines[i]
+            let low = line.lowercased()
+            if dashDropCue.contains(low) || low == "accept" || low == "decline" || low.hasPrefix("accept ") { break }
+            if name == nil, !(line.first?.isNumber ?? false) {
+                name = line
+            } else {
+                address.append(line)
+                if addressEnd.contains(line) { i += 1; break }
+            }
+            i += 1
+        }
+        var pickup: String?
+        if !address.isEmpty {
+            pickup = ([name].compactMap { $0 } + [address.joined(separator: " ")]).joined(separator: ", ")
+        } else {
+            pickup = name
+        }
+        // Dropoff: only if DoorDash printed a street address after the dropoff label.
+        var dropoff: String?
+        if let d = lines.firstIndex(where: { $0.lowercased().contains("customer dropoff") }), d + 1 < lines.count,
+           let m = street.first(lines[d + 1]) {
+            dropoff = m.value.trimmingCharacters(in: .whitespaces)
+        }
+        return (pickup, dropoff)
     }
 
     // MARK: pay

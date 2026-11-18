@@ -119,6 +119,11 @@ public struct OfferRecord: Codable, Identifiable, Equatable, Hashable {
     public var decision: Decision
     /// Last time this record changed (used to merge with the cloud copy).
     public var updatedAt: Date?
+    /// Where the pickup and dropoff are, when they could be located.
+    public var pickupLocation: Coord?
+    public var dropoffLocation: Coord?
+    /// True when the dropoff was worked out from the DoorDash map (approximate).
+    public var dropoffEstimated: Bool?
 
     public init(id: UUID = UUID(), date: Date = Date(), app: GigApp, pay: Double, miles: Double?, minutes: Int?,
                 pickupText: String?, dropoffText: String?, grade: String, category: OfferCategory,

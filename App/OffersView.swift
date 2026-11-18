@@ -1,4 +1,5 @@
 import SwiftUI
+import MapKit
 import GigCore
 
 /// Every offer GigGrade saw, organized by day / week / month / quarter / year,
@@ -157,6 +158,27 @@ struct OfferDetailView: View {
                         row("Miles", r.miles.map { String(format: "%.1f", $0) } ?? "—")
                         row("Minutes", r.minutes.map { "\($0)" } ?? "—")
                         row("After costs", money(r.netPay(costPerMile: model.settings.costPerMile)))
+                    }
+                    if r.pickupLocation != nil || r.dropoffLocation != nil {
+                        Section {
+                            Map(initialPosition: .automatic) {
+                                if let pl = r.pickupLocation {
+                                    Marker("Pickup", systemImage: "bag.fill", coordinate: pl.cl).tint(.blue)
+                                }
+                                if let dl = r.dropoffLocation {
+                                    Marker(r.dropoffEstimated == true ? "Customer (approx.)" : "Dropoff",
+                                           systemImage: "person.fill", coordinate: dl.cl).tint(.green)
+                                }
+                            }
+                            .frame(height: 220)
+                            .listRowInsets(EdgeInsets())
+                        } header: {
+                            Text("Map")
+                        } footer: {
+                            if r.dropoffEstimated == true {
+                                Text("The customer pin was worked out from the DoorDash map using your GPS position and the store's address — usually within a few blocks. Compare with the screenshot above.")
+                            }
+                        }
                     }
                     if r.pickupText != nil || r.dropoffText != nil || r.routeNote != nil {
                         Section("Trip") {

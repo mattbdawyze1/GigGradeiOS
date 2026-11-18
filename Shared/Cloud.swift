@@ -7,6 +7,20 @@ import GigCore
 ///   route and location from the cloud;
 /// - the app uploads those settings, marks offers Accepted/Declined, and downloads the offer log.
 /// Changes are queued on the phone and retried, so weak signal doesn't lose anything.
+extension OfferRecord {
+    func withLocations(pickup: Coord?, dropoff: Coord?, estimated: Bool?) -> OfferRecord {
+        var r = self
+        r.pickupLocation = pickup
+        r.dropoffLocation = dropoff
+        r.dropoffEstimated = estimated
+        return r
+    }
+}
+
+enum MapEstimate {
+    static let label = "Customer (estimated from map)"
+}
+
 actor Cloud {
     static let shared = Cloud()
 
@@ -155,6 +169,8 @@ actor Cloud {
                         dollarsPerMile: dollars_per_mile, routeNote: route_note,
                         screenshotFile: screenshot_path.map { ($0 as NSString).lastPathComponent },
                         decision: Decision(rawValue: decision ?? "pending") ?? .pending, updatedAt: updated_at)
+                .withLocations(pickup: pickup_stop?.location, dropoff: dropoff_stop?.location,
+                               estimated: dropoff_stop.map { $0.label.contains(MapEstimate.label) })
         }
     }
 

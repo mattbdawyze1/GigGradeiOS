@@ -27,6 +27,15 @@ The app reads gig offers live from your screen through iOS screen broadcasting (
 
 > The Offers log, screenshots and timer are shared between the screen reader and the app through the App Group. With a free Apple ID (Sideloadly) iOS may strip the App Group; if the Offers tab stays empty while banners still appear, that's why. TestFlight fixes it.
 
+## Version 4: DoorDash map reading
+DoorDash shows the customer only as a pin on its map. GigGrade now finds the pins in the screen frame
+(store icon vs person icon, plus your blue GPS dot), uses your GPS position and the store's address as
+two known points to get the map's scale, and works out the customer's location — usually within a few
+blocks. That feeds the on-the-way check and "Accepted + add to route". Offer details show the pickup and
+estimated customer on a map next to the screenshot so you can compare.
+Tuned on real DoorDash screenshots (dark map). Needs the blue dot and the store pin on screen, and a
+recent GPS fix (location permission "Always" keeps it fresh).
+
 ## Version 3: cloud sync (Supabase)
 The screen reader and the app now share data through your own Supabase project, so everything works
 even when iOS doesn't give a sideloaded install shared storage:

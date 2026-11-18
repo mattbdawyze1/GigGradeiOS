@@ -38,7 +38,7 @@ final class LocationTracker: NSObject, CLLocationManagerDelegate {
     func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
         guard let l = locations.last else { return }
         SharedStore.shared.currentLocation = Coord(l.coordinate)
-        if Date().timeIntervalSince(lastCloudPush) > 60 {
+        if Date().timeIntervalSince(lastCloudPush) > 20 {
             lastCloudPush = Date()
             Task { await Cloud.shared.schedulePushState() } // the screen reader uses it for on-the-way checks
         }

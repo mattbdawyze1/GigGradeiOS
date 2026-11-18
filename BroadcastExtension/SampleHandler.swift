@@ -69,8 +69,11 @@ class SampleHandler: RPBroadcastSampleHandler {
                 try handler.perform([request])
                 guard let text = Self.offerText(from: request.results ?? []) else { return } // GigGrade's own screen
                 let ctx = ciContext
+                let upright = orientation == .up
                 OfferPipeline.shared.handle(text: text, screenshot: {
                     Self.jpeg(pixelBuffer, orientation: orientation, context: ctx)
+                }, mapPins: {
+                    upright ? MapPinDetector.detect(pixelBuffer) : nil
                 })
             } catch {
                 // Skip this frame.

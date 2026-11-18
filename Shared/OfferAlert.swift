@@ -68,6 +68,13 @@ enum OfferAlert {
         return lines.joined(separator: "\n")
     }
 
+    static func body(_ o: Offer, _ s: Score, _ settings: DriverSettings, _ p: NotificationPrefs,
+                     _ otw: TripPlanner.OnTheWay?, dropoffEstimated: Bool) -> String {
+        var text = body(o, s, settings, p, otw)
+        if dropoffEstimated, p.showOnTheWay, otw != nil { text += "\n📍 Customer location estimated from the map" }
+        return text
+    }
+
     static func sound(_ choice: SoundChoice) -> UNNotificationSound? {
         switch choice {
         case .none: return nil
@@ -79,10 +86,11 @@ enum OfferAlert {
     }
 
     static func post(record: OfferRecord, offer: Offer, score: Score, settings: DriverSettings,
-                     prefs: NotificationPrefs, otw: TripPlanner.OnTheWay?, canAddToRoute: Bool, silent: Bool) {
+                     prefs: NotificationPrefs, otw: TripPlanner.OnTheWay?, canAddToRoute: Bool, silent: Bool,
+                     dropoffEstimated: Bool = false) {
         let c = UNMutableNotificationContent()
         c.title = title(offer, score, prefs)
-        c.body = body(offer, score, settings, prefs, otw)
+        c.body = body(offer, score, settings, prefs, otw, dropoffEstimated: dropoffEstimated)
         c.categoryIdentifier = canAddToRoute ? routeCategory : basicCategory
         c.interruptionLevel = .active
         c.relevanceScore = 1

@@ -30,7 +30,9 @@ final class OfferPipeline {
     /// - Parameters:
     ///   - screenshot: called only when a NEW offer is confirmed; returns a JPEG of the screen.
     ///   - immediate: skip the 2-scan check (used by "Test with a sample offer").
-    func handle(text: String, screenshot: (() -> Data?)? = nil, immediate: Bool = false) {
+    ///   - mapPins: called only for a NEW offer with no dropoff address (DoorDash); finds the map pins.
+    func handle(text: String, screenshot: (() -> Data?)? = nil, mapPins: (() -> MapPins?)? = nil,
+                immediate: Bool = false) {
         let now = Date()
         guard let offer = OfferParser.parse(text) else {
             lock.lock()
@@ -62,6 +64,8 @@ final class OfferPipeline {
                                  category: score.category, dollarsPerHour: score.dollarsPerHour,
                                  dollarsPerMile: score.dollarsPerMile)
         if let jpeg = screenshot?() { record.screenshotFile = log.saveScreenshot(jpeg, id: record.id) }
+        // DoorDash shows the customer only as a pin on its map: find the pins while this frame is still here.
+        let pins: MapPins? = (offer.dropoffText == nil) ? mapPins?() : nil
         log.append(record)
         let dayKey = OfferLog.dayKey(record.date)
         Task { await Cloud.shared.queueOffer(id: record.id, dayKey: dayKey) }
@@ -77,27 +81,44 @@ final class OfferPipeline {
             let orderId = saved.id.uuidString
             let p = await PlaceFinder.find(offer.pickupText, near: near)
                 .map { Stop(type: .pickup, label: offer.pickupText ?? "Pickup", location: $0, orderId: orderId) }
-            let d = await PlaceFinder.find(offer.dropoffText, near: near)
+            var d = await PlaceFinder.find(offer.dropoffText, near: near)
                 .map { Stop(type: .dropoff, label: offer.dropoffText ?? "Dropoff", location: $0, orderId: orderId) }
+            var estimated = false
+            if d == nil, let pins, let pickupStop = p {
+                // Use the freshest GPS fix (the blue dot on DoorDash's map is "now").
+                await Cloud.shared.pullSettingsIntoStore(force: true)
+                if let me = store.currentLocation,
+                   let est = MapLocator.locate(pins: pins, me: me, store: pickupStop.location, statedMiles: offer.miles) {
+                    d = Stop(type: .dropoff, label: MapEstimate.label, location: est.finalDropoff, orderId: orderId)
+                    estimated = true
+                }
+            }
             guard self.currentKey == offer.key else { return } // a newer offer replaced this one
+            let foundPickup = p?.location, foundDropoff = d?.location, wasEstimated = estimated
+            log.update(id: saved.id, dayKey: OfferLog.dayKey(saved.date)) {
+                $0.pickupLocation = foundPickup
+                $0.dropoffLocation = foundDropoff
+                $0.dropoffEstimated = foundDropoff == nil ? nil : wasEstimated
+            }
 
             let planner = TripPlanner(stops: store.stops)
             let otw = planner.stops.isEmpty ? nil
-                : planner.checkOnTheWay(origin: near, pickup: p, dropoff: d, pay: offer.pay, settings: settings)
+                : planner.checkOnTheWay(origin: store.currentLocation ?? near, pickup: p, dropoff: d,
+                                        pay: offer.pay, settings: settings)
             if let note = otw?.message {
                 log.update(id: saved.id, dayKey: OfferLog.dayKey(saved.date)) { $0.routeNote = note }
             }
             var canAdd = false
-            if let p, let d, planner.canAdd(2) {
-                store.savePending(orderId: orderId, pickup: p, dropoff: d)
-                canAdd = true
+            if let p, let d {
+                store.savePending(orderId: orderId, pickup: p, dropoff: d) // also sent to the cloud with the offer
+                canAdd = planner.canAdd(2)
             }
-            if otw?.message != nil || canAdd {
+            if otw?.message != nil || p != nil || d != nil {
                 await Cloud.shared.queueOffer(id: saved.id, dayKey: OfferLog.dayKey(saved.date)) // route note + stops
             }
             if otw != nil || canAdd {
                 OfferAlert.post(record: saved, offer: offer, score: score, settings: settings, prefs: prefs,
-                                otw: otw, canAddToRoute: canAdd, silent: true)
+                                otw: otw, canAddToRoute: canAdd, silent: true, dropoffEstimated: estimated)
             }
         }
     }
