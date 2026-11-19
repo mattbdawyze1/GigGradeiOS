@@ -43,6 +43,17 @@ struct OffersView: View {
                 }
             }
             .navigationTitle("Offers")
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    NavigationLink {
+                        MissedOffersView()
+                    } label: {
+                        Label("Missed offers", systemImage: "exclamationmark.bubble")
+                            .labelStyle(.titleAndIcon)
+                            .font(.subheadline)
+                    }
+                }
+            }
             .sheet(item: $selected) { r in
                 OfferDetailView(recordId: r.id, model: model)
             }

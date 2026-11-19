@@ -48,51 +48,63 @@ public enum MapLocator {
     ///   - store: the pickup's real location (from its address).
     ///   - statedMiles: the offer's total miles, used as a sanity check.
     /// - Returns: nil when the picture and the known locations don't agree well enough to trust.
-    public static func locate(pins: MapPins, me: Coord, store: Coord, statedMiles: Double?) -> Estimate? {
-        guard let meP = pins.me, let storeP = pins.stores.first, !pins.customers.isEmpty else { return nil }
-
-        // Screen vector (flip y so "up" is north) and world vector between the two reference points.
-        let sdx = storeP.x - meP.x, sdy = -(storeP.y - meP.y)
+    /// General form: two map points whose real locations are known fix the scale; returns the real
+    /// locations of `targets`. nil if the picture and the known locations disagree (map not north-up,
+    /// stale GPS, or an address that matched the wrong place).
+    public static func solve(refA: MapPins.Point, worldA: Coord, refB: MapPins.Point, worldB: Coord,
+                             targets: [MapPins.Point]) -> (coords: [Coord], rotation: Double, metersPerPixel: Double)? {
+        let sdx = refB.x - refA.x, sdy = -(refB.y - refA.y)
         let screenLen = (sdx * sdx + sdy * sdy).squareRoot()
         guard screenLen >= 40 else { return nil } // too close together on screen to measure scale
 
-        let w0 = project(me), w1 = project(store)
+        let w0 = project(worldA), w1 = project(worldB)
         let wdx = w1.x - w0.x, wdy = w1.y - w0.y
         let worldLen = (wdx * wdx + wdy * wdy).squareRoot()
-        guard worldLen >= 50 else { return nil } // you're basically at the store: no scale info
+        guard worldLen >= 50 else { return nil } // the two places are basically the same spot
 
         // Similarity transform world = a * screen + b, with a = scale·e^(iθ) as a complex number.
         let denom = sdx * sdx + sdy * sdy
         let aRe = (wdx * sdx + wdy * sdy) / denom
         let aIm = (wdy * sdx - wdx * sdy) / denom
         let rotation = atan2(aIm, aRe) * 180 / .pi
-        // Mercator meters are stretched by 1/cos(lat); convert to ground meters for the sanity checks.
-        let groundScale = (aRe * aRe + aIm * aIm).squareRoot() * cos(me.lat * .pi / 180)
-
-        // DoorDash maps are north-up. A big rotation means the GPS fix is stale or the store
-        // address matched the wrong place, so don't trust the estimate.
-        guard abs(rotation) <= 20 else { return nil }
+        let groundScale = (aRe * aRe + aIm * aIm).squareRoot() * cos(worldA.lat * .pi / 180)
+        guard abs(rotation) <= 20 else { return nil }           // offer maps are north-up
         guard groundScale > 0.3, groundScale < 250 else { return nil } // meters per pixel
 
-        func toWorld(_ p: MapPins.Point) -> Coord {
-            let dx = p.x - meP.x, dy = -(p.y - meP.y)
-            let x = w0.x + aRe * dx - aIm * dy
-            let y = w0.y + aIm * dx + aRe * dy
-            return unproject(x, y)
+        let coords = targets.map { p -> Coord in
+            let dx = p.x - refA.x, dy = -(p.y - refA.y)
+            return unproject(w0.x + aRe * dx - aIm * dy, w0.y + aIm * dx + aRe * dy)
         }
+        return (coords, rotation, groundScale)
+    }
 
-        let customers = pins.customers.map(toWorld)
-            .sorted { Geo.straightMiles(store, $0) < Geo.straightMiles(store, $1) }
+    /// - Parameters:
+    ///   - me: your current GPS location (the blue dot / arrow).
+    ///   - store: the pickup's real location (from its address).
+    ///   - statedMiles: the offer's total miles, used as a sanity check.
+    /// - Returns: nil when the picture and the known locations don't agree well enough to trust.
+    public static func locate(pins: MapPins, me: Coord, store: Coord, statedMiles: Double?) -> Estimate? {
+        guard let meP = pins.me, let storeP = pins.stores.first, !pins.customers.isEmpty,
+              let solved = solve(refA: meP, worldA: me, refB: storeP, worldB: store, targets: pins.customers)
+        else { return nil }
+        let customers = solved.coords.sorted { Geo.straightMiles(store, $0) < Geo.straightMiles(store, $1) }
         guard let last = customers.last else { return nil }
 
         // Sanity check against the offer's own mileage (generous: roads wind, miles may differ).
         if let miles = statedMiles, miles > 0 {
             let path = Geo.routeMiles([store] + customers)
             let withDriveToStore = path + Geo.roadMiles(me, store)
-            let ratioLow = path / miles, ratioHigh = withDriveToStore / miles
-            guard ratioHigh >= 0.3, ratioLow <= 3.0 else { return nil }
+            guard withDriveToStore / miles >= 0.3, path / miles <= 3.0 else { return nil }
         }
+        return Estimate(customers: customers, finalDropoff: last, rotationDegrees: solved.rotation,
+                        metersPerPixel: solved.metersPerPixel)
+    }
 
-        return Estimate(customers: customers, finalDropoff: last, rotationDegrees: rotation, metersPerPixel: groundScale)
+    /// The reverse: dropoff known (from its address), pickup unknown (e.g. a store name Apple Maps can't find).
+    public static func locatePickup(pins: MapPins, me: Coord, dropoff: Coord) -> Coord? {
+        guard let meP = pins.me, let dropP = pins.customers.last, let storeP = pins.stores.first,
+              let solved = solve(refA: meP, worldA: me, refB: dropP, worldB: dropoff, targets: [storeP])
+        else { return nil }
+        return solved.coords.first
     }
 }

@@ -49,3 +49,14 @@ alter table public.app_state enable row level security;
 -- Private folder for offer screenshots
 insert into storage.buckets (id, name, public) values ('screenshots', 'screenshots', false)
 on conflict (id) do nothing;
+
+-- Version 4.7: offers the screen reader saw but couldn't read (for diagnosing missed banners)
+create table if not exists public.missed_offers (
+  id uuid primary key,
+  date timestamptz not null,
+  reason text not null,
+  ocr_text text not null,
+  screenshot_path text
+);
+create index if not exists missed_offers_date on public.missed_offers (date);
+alter table public.missed_offers enable row level security;

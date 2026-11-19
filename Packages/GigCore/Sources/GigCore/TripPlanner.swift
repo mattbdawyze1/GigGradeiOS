@@ -110,6 +110,8 @@ public struct TripPlanner {
         public var insertion: Insertion?
         /// True when there was no route, so distances are measured from where you are.
         public var fromHere: Bool
+        /// True when the pickup couldn't be located, so only "where it ends" was checked.
+        public var approximate = false
 
         public init(verdict: Verdict, addedMiles: Double? = nil, dropoffToFinalMi: Double? = nil,
                     stackedPerMile: Double? = nil, insertion: Insertion? = nil, fromHere: Bool = false) {
@@ -121,6 +123,11 @@ public struct TripPlanner {
 
         /// Short form for the banner (fits on one line).
         public var shortMessage: String {
+            let text = shortText
+            return approximate && !text.isEmpty ? "≈ " + text : text
+        }
+
+        private var shortText: String {
             let f = { (x: Double?) in String(format: "%.1f", x ?? 0) }
             switch verdict {
             case .noActiveTrip: return ""
@@ -130,6 +137,7 @@ public struct TripPlanner {
             case .nearFinal: return "✅ ON THE WAY · ends \(f(dropoffToFinalMi)) mi from last stop"
             case .onTheWay: return "✅ CLOSE BY · only +\(f(addedMiles)) mi"
             case .offRoute where fromHere: return "❌ OFF ROUTE · ends \(f(dropoffToFinalMi)) mi from you"
+            case .offRoute where addedMiles == nil: return "❌ OFF ROUTE · ends \(f(dropoffToFinalMi)) mi from last stop"
             case .offRoute: return "❌ OFF ROUTE · +\(f(addedMiles)) mi extra"
             }
         }
@@ -161,7 +169,14 @@ public struct TripPlanner {
             return OnTheWay(verdict: away <= s.onTheWayRadiusMi ? .nearFinal : .offRoute,
                             dropoffToFinalMi: away, fromHere: true)
         }
-        guard let origin, let pickup, let dropoff else { return OnTheWay(verdict: .unknownLocation) }
+        guard let origin, let dropoff else { return OnTheWay(verdict: .unknownLocation) }
+        guard let pickup else {
+            // Pickup not found: still say whether it ENDS near your final stop (approximate).
+            let toFinal = Geo.roadMiles(dropoff.location, lastStop.location)
+            var r = OnTheWay(verdict: toFinal <= s.onTheWayRadiusMi ? .nearFinal : .offRoute, dropoffToFinalMi: toFinal)
+            r.approximate = true
+            return r
+        }
         guard canAdd(2), let ins = bestInsertion(origin: origin, pickup: pickup, dropoff: dropoff) else {
             return OnTheWay(verdict: .tooManyStops)
         }

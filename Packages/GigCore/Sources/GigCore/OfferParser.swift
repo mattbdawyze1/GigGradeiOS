@@ -27,6 +27,14 @@ struct Rx {
     func contains(_ s: String) -> Bool { first(s) != nil }
 }
 
+/// One line read off the screen. `emphasis` = how strongly the text stands out from its background
+/// (bold white/black text ≈ 200+, gray secondary text lower); nil when not measured.
+public struct OCRLine: Equatable {
+    public var text: String
+    public var emphasis: Double?
+    public init(_ text: String, emphasis: Double? = nil) { self.text = text; self.emphasis = emphasis }
+}
+
 /// Turns raw OCR text from the screen into an `Offer`.
 ///
 /// Gig apps change layouts often, so this is forgiving: it looks for a dollar amount plus
@@ -71,10 +79,16 @@ public enum OfferParser {
     }
 
     public static func parse(_ text: String, now: Date = Date(), calendar: Calendar = .current) -> Offer? {
+        parse(lines: text.components(separatedBy: .newlines).map { OCRLine($0) }, now: now, calendar: calendar)
+    }
+
+    /// Same as `parse(_:)`, but lines can carry how bold/bright they look on screen.
+    public static func parse(lines ocr: [OCRLine], now: Date = Date(), calendar: Calendar = .current) -> Offer? {
+        let ocr = ocr.map { OCRLine($0.text.trimmingCharacters(in: .whitespaces), emphasis: $0.emphasis) }
+            .filter { !$0.text.isEmpty }
+        let text = ocr.map(\.text).joined(separator: "\n")
         guard looksLikeOffer(text) else { return nil }
-        let lines = text.components(separatedBy: .newlines)
-            .map { $0.trimmingCharacters(in: .whitespaces) }
-            .filter { !$0.isEmpty }
+        let lines = ocr.map(\.text)
         guard let pay = pickPay(lines), pay > 0, pay <= 500 else { return nil }
         let app = detectApp(text)
         var pickup = pickAddress(lines, isPickup: true)
@@ -82,7 +96,7 @@ public enum OfferParser {
         if app == .doordash, let dash = doorDashPlaces(lines) {
             pickup = dash.pickup
             dropoff = dash.dropoff // usually nil: DoorDash only shows the customer on the map
-        } else if app == .uber, let u = uberPlaces(lines) {
+        } else if app == .uber, let u = uberPlaces(ocr) {
             pickup = u.pickup
             dropoff = u.dropoff
         }
@@ -107,27 +121,78 @@ public enum OfferParser {
     //   Accept | Match
 
     static func uberPlaces(_ lines: [String]) -> (pickup: String?, dropoff: String?)? {
-        guard let start = lines.firstIndex(where: { $0.lowercased().contains("total") && milesRx.contains($0) }) else { return nil }
-        var block: [String] = []
+        uberPlaces(lines.map { OCRLine($0) })
+    }
+
+    static func uberPlaces(_ lines: [OCRLine]) -> (pickup: String?, dropoff: String?)? {
+        guard let start = lines.firstIndex(where: { $0.text.lowercased().contains("total") && milesRx.contains($0.text) })
+        else { return nil }
+        var block: [OCRLine] = []
         for line in lines[(start + 1)...] {
-            let low = line.lowercased()
+            let low = line.text.lowercased()
             if low == "accept" || low == "match" || low.hasPrefix("accept ") || low.hasPrefix("match ") { break }
-            if line.count <= 2 { continue } // stray map-label fragments at the screen edges
+            if line.text.count <= 2 { continue } // stray map-label fragments at the screen edges
             block.append(line)
         }
         guard !block.isEmpty else { return nil }
-        // The dropoff starts at the first cross-street line ("A & B"), otherwise at the first
-        // "street, town" line after the store name.
-        let split = block.firstIndex(where: { $0.contains("&") })
-            ?? block.indices.dropFirst().first(where: { block[$0].contains(",") })
-        let storeLines = split.map { Array(block[..<$0]) } ?? block
-        let dropLines = split.map { Array(block[$0...]) } ?? []
+
+        var storeLines: [String] = []
+        var dropLines: [String] = []
+
+        // a) Uber prints the store in bold/bright text and the dropoff in gray: split by brightness.
+        let measured = block.compactMap(\.emphasis)
+        if measured.count == block.count, let top = measured.max(), let low = measured.min(), top - low >= 15 {
+            for (i, line) in block.enumerated() {
+                let isGray = (line.emphasis ?? top) < top - 15
+                if isGray && i > 0 { dropLines.append(line.text) } else if dropLines.isEmpty { storeLines.append(line.text) }
+                else { dropLines.append(line.text) } // anything after the dropoff starts stays with it
+            }
+        } else {
+            // b) Text after the store's closing ")" on the same line belongs to the dropoff.
+            var texts = block.map(\.text)
+            if let i = texts.firstIndex(where: { line in
+                guard let close = line.lastIndex(of: ")") else { return false }
+                let tail = line[line.index(after: close)...].trimmingCharacters(in: .whitespaces)
+                return line.contains("(") && tail.count >= 4 && (tail.contains("&") || tail.contains(","))
+            }) {
+                let line = texts[i]
+                let close = line.lastIndex(of: ")")!
+                let head = String(line[...close]), tail = String(line[line.index(after: close)...])
+                texts.replaceSubrange(i...i, with: [head, tail.trimmingCharacters(in: .whitespaces)])
+                storeLines = Array(texts[...i])
+                dropLines = Array(texts[(i + 1)...])
+            } else {
+                // c) Cross streets ("A & B"), otherwise the first "street, town" line after the store.
+                let split = texts.firstIndex(where: { $0.contains("&") })
+                    ?? texts.indices.dropFirst().first(where: { texts[$0].contains(",") })
+                storeLines = split.map { Array(texts[..<$0]) } ?? texts
+                dropLines = split.map { Array(texts[$0...]) } ?? []
+            }
+        }
+
         var pickup = storeLines.joined(separator: " ")
         // "Panera (4959 Nesconset Hwy )" -> "Panera 4959 Nesconset Hwy" (better map search)
         pickup = pickup.replacingOccurrences(of: "(", with: " ").replacingOccurrences(of: ")", with: " ")
         pickup = pickup.split(separator: " ").joined(separator: " ")
         let dropoff = dropLines.joined(separator: " ").split(separator: " ").joined(separator: " ")
         return (pickup.isEmpty ? nil : pickup, dropoff.isEmpty ? nil : dropoff)
+    }
+
+    /// Why a screen that looks like an offer couldn't be read (for the Missed offers log); nil if it can be.
+    public static func diagnose(_ text: String) -> String? {
+        let t = text.lowercased()
+        if !money.contains(text) { return "No price ($) was read" }
+        if !(milesRx.contains(text) || minsRx.contains(text)) { return "No miles or minutes were read" }
+        if !offerCues.contains(where: { t.contains($0) }) { return "No Accept / Decline / Match button text was read" }
+        if parse(text) == nil { return "Price was outside $0–$500 or couldn't be read as a number" }
+        return nil
+    }
+
+    /// A screen that is probably an offer, even if it can't be fully read.
+    public static func looksOfferish(_ text: String) -> Bool {
+        let t = text.lowercased()
+        return money.contains(text) && ["accept", "decline", "match", "incl. tip", "guaranteed", "total", "stops"]
+            .contains { t.contains($0) }
     }
 
     // MARK: DoorDash layout

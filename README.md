@@ -27,6 +27,23 @@ The app reads gig offers live from your screen through iOS screen broadcasting (
 
 > The Offers log, screenshots and timer are shared between the screen reader and the app through the App Group. With a free Apple ID (Sideloadly) iOS may strip the App Group; if the Offers tab stays empty while banners still appear, that's why. TestFlight fixes it.
 
+## Version 4.7.1
+
+- **Missed offers** button at the top right of the Offers tab.
+
+## Version 4.7: sturdier Uber reading + Missed offers log
+- **Uber store vs dropoff by brightness:** the store line is bold/bright, the dropoff gray — measured from the
+  screen pixels, so wrapped or run-together lines no longer get mixed up. Text after a store's ")" that
+  looks like an address is treated as the dropoff when brightness isn't available.
+- **Better lookups:** cross streets try several phrasings plus each street + town; name-only stores also
+  try "name, town".
+- **Uber map reading (light and dark maps):** green pickup pin, black/gray dropoff pin and your arrow.
+  Used when an address can't be found, and to overrule an address lookup that landed far from the pin.
+- **Partial verdicts:** if only the dropoff is found, you still get "≈ ON THE WAY / ≈ OFF ROUTE".
+- **Looser double-check:** an offer needs the same pay + miles twice (minutes can flicker).
+- **Missed offers log** (Offers tab → Missed offers): offers that were on screen but got no banner, with the
+  reason, what was read, and a screenshot. Needs the `missed_offers` table (bottom of `supabase/setup.sql`).
+
 ## Version 4: DoorDash map reading
 DoorDash shows the customer only as a pin on its map. GigGrade now finds the pins in the screen frame
 (store icon vs person icon, plus your blue GPS dot), uses your GPS position and the store's address as

@@ -379,6 +379,50 @@ actor Cloud {
         store.broadcastStartedAt = s.broadcast_started_at
     }
 
+    // MARK: Missed offers (screen reader → cloud → app), for diagnosing offers that got no banner
+
+    struct MissedRow: Codable, Identifiable {
+        var id: UUID
+        var date: Date
+        var reason: String
+        var ocr_text: String
+        var screenshot_path: String?
+    }
+
+    /// Best effort: if there's no signal, the note is simply dropped (it's only for diagnosis).
+    func reportMissed(reason: String, text: String, jpeg: Data?) async {
+        guard Self.isConfigured else { return }
+        let id = UUID()
+        var path: String?
+        if let jpeg {
+            let p = "missed/\(id.uuidString).jpg"
+            if (try? await send("POST", "/storage/v1/object/screenshots/\(p)", body: jpeg,
+                                contentType: "image/jpeg", headers: ["x-upsert": "true"])) != nil { path = p }
+        }
+        let row = MissedRow(id: id, date: Date(), reason: reason, ocr_text: String(text.prefix(4000)), screenshot_path: path)
+        _ = try? await send("POST", "/rest/v1/missed_offers", body: try Self.encoder.encode([row]),
+                            headers: ["Prefer": "return=minimal"])
+    }
+
+    func missedOffers(limit: Int = 50) async -> [MissedRow]? {
+        guard Self.isConfigured,
+              let data = try? await send("GET", "/rest/v1/missed_offers", query: [
+                URLQueryItem(name: "select", value: "*"),
+                URLQueryItem(name: "order", value: "date.desc"),
+                URLQueryItem(name: "limit", value: "\(limit)"),
+              ]) else { return nil }
+        return try? Self.decoder.decode([MissedRow].self, from: data)
+    }
+
+    func deleteMissed(_ row: MissedRow) async {
+        _ = try? await send("DELETE", "/rest/v1/missed_offers", query: [URLQueryItem(name: "id", value: "eq.\(row.id.uuidString)")])
+        if let p = row.screenshot_path { _ = try? await send("DELETE", "/storage/v1/object/screenshots/\(p)") }
+    }
+
+    func missedScreenshot(_ path: String) async -> Data? {
+        try? await send("GET", "/storage/v1/object/authenticated/screenshots/\(path)")
+    }
+
     // MARK: Recording timer (screen reader → cloud → app)
 
     func broadcastStarted(at date: Date) async {
