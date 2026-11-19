@@ -7,14 +7,18 @@ struct MissedOffersView: View {
     @State private var rows: [Cloud.MissedRow] = []
     @State private var loading = true
     @State private var failed = false
+    @State private var errorText = ""
 
     var body: some View {
         List {
             if loading {
                 HStack { ProgressView(); Text("Loading…").foregroundStyle(.secondary) }
             } else if failed {
-                Text("Couldn't load from the cloud. Check the connection on Home, and that the missed_offers table exists in Supabase (see setup.sql).")
-                    .font(.footnote).foregroundStyle(.secondary)
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Couldn't load missed offers").font(.subheadline.weight(.semibold))
+                    Text(errorText).font(.footnote).textSelection(.enabled)
+                    Text("Pull down to try again.").font(.caption).foregroundStyle(.secondary)
+                }
             } else if rows.isEmpty {
                 Text("Nothing missed yet. When an offer is on screen but GigGrade can't read it, it shows up here with a screenshot and the reason.")
                     .font(.footnote).foregroundStyle(.secondary)
@@ -37,7 +41,10 @@ struct MissedOffersView: View {
     }
 
     private func load() async {
-        if let r = await Cloud.shared.missedOffers() { rows = r; failed = false } else { failed = true }
+        switch await Cloud.shared.missedOffersResult() {
+        case .success(let r): rows = r; failed = false
+        case .failure(let e): rows = []; errorText = e.message; failed = true
+        }
         loading = false
     }
 }

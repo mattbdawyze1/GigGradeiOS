@@ -7,6 +7,7 @@ import GigCore
 struct OffersView: View {
     @StateObject private var model = LogModel(period: .day)
     @State private var selected: OfferRecord?
+    @State private var adding = false
 
     var body: some View {
         NavigationStack {
@@ -26,7 +27,7 @@ struct OffersView: View {
 
                 if model.records.isEmpty {
                     Section {
-                        Text("No offers logged for this \(model.period.label.lowercased()). Start the screen reader on Home and they'll appear here automatically.")
+                        Text("No offers logged for this \(model.period.label.lowercased()). Start the screen reader on Home and they'll appear here automatically, or tap Add order to log one by hand.")
                             .font(.subheadline).foregroundStyle(.secondary)
                     }
                 }
@@ -44,15 +45,23 @@ struct OffersView: View {
             }
             .navigationTitle("Offers")
             .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
+                ToolbarItemGroup(placement: .topBarTrailing) {
+                    Button { adding = true } label: {
+                        Label("Add order", systemImage: "plus.circle.fill")
+                            .labelStyle(.titleAndIcon)
+                            .font(.subheadline.weight(.semibold))
+                    }
                     NavigationLink {
                         MissedOffersView()
                     } label: {
-                        Label("Missed offers", systemImage: "exclamationmark.bubble")
+                        Label("Missed", systemImage: "exclamationmark.bubble")
                             .labelStyle(.titleAndIcon)
                             .font(.subheadline)
                     }
                 }
+            }
+            .sheet(isPresented: $adding) {
+                AddOfferView(day: model.period == .day ? model.anchor : Date())
             }
             .sheet(item: $selected) { r in
                 OfferDetailView(recordId: r.id, model: model)

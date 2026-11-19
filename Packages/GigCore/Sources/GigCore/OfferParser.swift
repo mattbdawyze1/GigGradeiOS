@@ -32,7 +32,12 @@ struct Rx {
 public struct OCRLine: Equatable {
     public var text: String
     public var emphasis: Double?
-    public init(_ text: String, emphasis: Double? = nil) { self.text = text; self.emphasis = emphasis }
+    /// Center of the line on screen, in the same pixel space as `MapPins` (nil when unknown).
+    public var x: Double?
+    public var y: Double?
+    public init(_ text: String, emphasis: Double? = nil, x: Double? = nil, y: Double? = nil) {
+        self.text = text; self.emphasis = emphasis; self.x = x; self.y = y
+    }
 }
 
 /// Turns raw OCR text from the screen into an `Offer`.

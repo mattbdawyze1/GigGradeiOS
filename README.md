@@ -27,6 +27,23 @@ The app reads gig offers live from your screen through iOS screen broadcasting (
 
 > The Offers log, screenshots and timer are shared between the screen reader and the app through the App Group. With a free Apple ID (Sideloadly) iOS may strip the App Group; if the Offers tab stays empty while banners still appear, that's why. TestFlight fixes it.
 
+## Version 4.9: zoom in to finish the on-the-way check
+
+- If the customer pin couldn't be placed, GigGrade keeps re-reading the map every 2 seconds for up to 90 seconds while the offer stays on screen.
+- Zoom in on the customer pin. If your blue dot and the store pin are still on screen, the pins are measured again. Otherwise GigGrade reads the two street names printed closest to the customer pin and looks up where they cross.
+- When it works, an **updated banner** replaces the first one with the verdict and "Dropoff ≈ A & B (from map)".
+- Street names are also tried on the first read when the pins alone weren't enough.
+- A first banner that went out without a verdict (lookup took over 3.5 s) is now followed by an updated one when the check finishes.
+
+## Version 4.8: add orders by hand
+
+- **Add order** button (top right of the Offers tab): app, pay, miles, minutes, time, accepted/declined, optional pickup/dropoff. Graded against your targets live, saved to the log and the cloud, and counted in Earnings/Insights when accepted.
+- **Missed** (top right of the Offers tab, after Add order) is the log of offers the screen reader saw but couldn't read.
+
+## Version 4.7.2
+
+- Missed offers screen shows the exact reason when it can't load (instead of a general message), and reads Supabase dates with 6-digit fractions.
+
 ## Version 4.7.1
 
 - **Missed offers** button at the top right of the Offers tab.

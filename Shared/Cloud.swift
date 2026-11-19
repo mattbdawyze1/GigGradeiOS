@@ -83,6 +83,12 @@ actor Cloud {
         d.dateDecodingStrategy = .custom { dec in
             let s = try dec.singleValueContainer().decode(String.self)
             if let date = withFraction.date(from: s) ?? plain.date(from: s) { return date }
+            // Postgres can send 6-digit fractions (…:12.123456+00:00); drop the fraction and retry.
+            if let dot = s.firstIndex(of: ".") {
+                let rest = s[s.index(after: dot)...]
+                let tz = rest.drop(while: { $0.isNumber })
+                if let date = plain.date(from: String(s[..<dot]) + tz) { return date }
+            }
             throw DecodingError.dataCorrupted(.init(codingPath: dec.codingPath, debugDescription: "Bad date \(s)"))
         }
         return d
@@ -404,14 +410,33 @@ actor Cloud {
                             headers: ["Prefer": "return=minimal"])
     }
 
-    func missedOffers(limit: Int = 50) async -> [MissedRow]? {
-        guard Self.isConfigured,
-              let data = try? await send("GET", "/rest/v1/missed_offers", query: [
+    /// Returns the rows, or the exact reason they couldn't be loaded (shown on screen for diagnosis).
+    func missedOffersResult(limit: Int = 50) async -> Result<[MissedRow], CloudError> {
+        guard Self.isConfigured else {
+            return .failure(CloudError(message: "Cloud sync isn't set up in this build. The Supabase variables weren't added in Codemagic (check the supabase group is attached)."))
+        }
+        let data: Data
+        do {
+            data = try await send("GET", "/rest/v1/missed_offers", query: [
                 URLQueryItem(name: "select", value: "*"),
                 URLQueryItem(name: "order", value: "date.desc"),
                 URLQueryItem(name: "limit", value: "\(limit)"),
-              ]) else { return nil }
-        return try? Self.decoder.decode([MissedRow].self, from: data)
+            ])
+        } catch let e as CloudError {
+            return .failure(e)
+        } catch {
+            return .failure(CloudError(message: "No connection — \(error.localizedDescription)"))
+        }
+        do {
+            return .success(try Self.decoder.decode([MissedRow].self, from: data))
+        } catch {
+            let peek = String(decoding: data.prefix(160), as: UTF8.self)
+            return .failure(CloudError(message: "Loaded, but couldn't read the rows — \(error) — \(peek)"))
+        }
+    }
+
+    func missedOffers(limit: Int = 50) async -> [MissedRow]? {
+        try? await missedOffersResult(limit: limit).get()
     }
 
     func deleteMissed(_ row: MissedRow) async {

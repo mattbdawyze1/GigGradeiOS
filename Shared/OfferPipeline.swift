@@ -31,6 +31,7 @@ final class OfferPipeline {
     func reset() {
         lock.lock()
         lastKey = nil; activePay = nil; candidateKey = nil; candidateCount = 0
+        rescue = nil
         resetEpisode()
         lock.unlock()
     }
@@ -89,6 +90,7 @@ final class OfferPipeline {
                     miss = (reason, episodeText, episodeShot)
                 }
                 lastKey = nil; activePay = nil; candidateKey = nil; candidateCount = 0
+                rescue = nil
                 resetEpisode()
             }
             lock.unlock()
@@ -110,11 +112,14 @@ final class OfferPipeline {
         let confirmed = immediate || candidateCount >= 2
         let sameOfferStillUp = activePay.map { abs($0 - offer.pay) < 0.01 } ?? false
         let shouldAlert = confirmed && !sameOfferStillUp && key != lastKey
-        if shouldAlert { lastKey = key; activePay = offer.pay; episodeAlerted = true }
+        if shouldAlert { lastKey = key; activePay = offer.pay; episodeAlerted = true; rescue = nil }
         let needShot = !shouldAlert && episodeShot == nil
         lock.unlock()
         if needShot, let jpeg = screenshot?() { lock.lock(); episodeShot = jpeg; lock.unlock() }
-        if !shouldAlert { return }
+        if !shouldAlert {
+            if sameOfferStillUp, let up = currentKey { retryIfNeeded(key: up, lines: lines, mapPins: mapPins, now: now) }
+            return
+        }
 
         let settings = store.settings
         let prefs = store.notificationPrefs
@@ -143,13 +148,13 @@ final class OfferPipeline {
         // 2) Locate pickup/dropoff (text first, map as backup and cross-check), run the check, post.
         Task {
             let near = store.currentLocation
-            let orderId = saved.id.uuidString
             var pickupCoord = await PlaceFinder.find(offer.pickupText, near: near)
             if pickupCoord == nil, let name = offer.pickupText, let town = PlaceFinder.town(in: offer.dropoffText) {
                 pickupCoord = await PlaceFinder.find("\(name), \(town)", near: near) // name-only stores
             }
             var dropoffCoord = await PlaceFinder.find(offer.dropoffText, near: near)
             var estimated = false
+            var streets: String?
 
             if let pins {
                 await Cloud.shared.pullSettingsIntoStore(force: true) // freshest GPS: the map's arrow/dot is "now"
@@ -168,53 +173,147 @@ final class OfferPipeline {
                         pickupCoord = pc // store name Apple Maps couldn't find
                     }
                 }
-            }
-
-            let p = pickupCoord.map { Stop(type: .pickup, label: offer.pickupText ?? "Pickup", location: $0, orderId: orderId) }
-            let d = dropoffCoord.map {
-                Stop(type: .dropoff, label: estimated ? MapEstimate.label : (offer.dropoffText ?? "Dropoff"),
-                     location: $0, orderId: orderId)
-            }
-            guard self.currentKey == key else { return } // a newer offer replaced this one
-
-            let foundPickup = p?.location, foundDropoff = d?.location, wasEstimated = estimated
-            log.update(id: saved.id, dayKey: OfferLog.dayKey(saved.date)) {
-                $0.pickupLocation = foundPickup
-                $0.dropoffLocation = foundDropoff
-                $0.dropoffEstimated = foundDropoff == nil ? nil : wasEstimated
-            }
-
-            let planner = TripPlanner(stops: store.stops)
-            let otw = planner.checkOnTheWay(origin: store.currentLocation ?? near, pickup: p, dropoff: d,
-                                            pay: offer.pay, settings: settings)
-            let note = otw.message
-            log.update(id: saved.id, dayKey: OfferLog.dayKey(saved.date)) { $0.routeNote = note }
-            var canAdd = false
-            if let p, let d {
-                store.savePending(orderId: orderId, pickup: p, dropoff: d) // also sent to the cloud with the offer
-                canAdd = planner.canAdd(2)
-            }
-
-            var dropoffInfo: DropoffInfo?
-            if let d {
-                let miles = store.currentLocation.map { Geo.roadMiles($0, d.location) }
-                var place = offer.dropoffText ?? d.label
-                if estimated {
-                    let named = await PlaceFinder.describe(d.location)
-                    place = named ?? "customer pin"
-                    let shown = place
-                    log.update(id: saved.id, dayKey: OfferLog.dayKey(saved.date)) { $0.dropoffText = "≈ \(shown) (from map)" }
+                if dropoffCoord == nil, let s = await self.streetEstimate(lines: lines, pins: pins, pickup: pickupCoord, offer: offer) {
+                    dropoffCoord = s.coord; estimated = true; streets = s.names
                 }
-                dropoffInfo = DropoffInfo(place: place, estimated: estimated, milesFromYou: miles)
             }
-            guard self.currentKey == key else { return }
 
-            await Cloud.shared.queueOffer(id: saved.id, dayKey: OfferLog.dayKey(saved.date)) // route note + stops
-            if gate.claim() {
-                OfferAlert.post(record: saved, offer: offer, score: score, settings: settings, prefs: prefs,
-                                otw: otw, canAddToRoute: canAdd, silent: false, dropoff: dropoffInfo)
+            let found = await self.finish(key: key, offer: offer, saved: saved, score: score, settings: settings,
+                                          prefs: prefs, pickup: pickupCoord, dropoff: dropoffCoord,
+                                          estimated: estimated, streets: streets, gate: gate)
+            if !found {
+                // Couldn't place the customer yet: keep re-reading the map while this offer stays on screen
+                // (zoom in on the customer pin to help), and send an updated banner when it works.
+                self.lock.lock()
+                if self.lastKey == key {
+                    self.rescue = Rescue(key: key, offer: offer, saved: saved, score: score, settings: settings,
+                                         prefs: prefs, pickup: pickupCoord, until: Date().addingTimeInterval(90))
+                }
+                self.lock.unlock()
             }
         }
+    }
+
+    // MARK: Retry the map while the offer stays up (zoomed-in map, map that was still loading)
+
+    private struct Rescue {
+        let key: String
+        let offer: Offer
+        let saved: OfferRecord
+        let score: Score
+        let settings: DriverSettings
+        let prefs: NotificationPrefs
+        let pickup: Coord?
+        let until: Date
+        var lastTry = Date.distantPast
+        var busy = false
+    }
+    private var rescue: Rescue?
+
+    /// Called for every scan of an offer that already has its banner. Returns quickly unless a retry is due.
+    private func retryIfNeeded(key: String, lines: [OCRLine], mapPins: ((GigApp) -> MapPins?)?, now: Date) {
+        lock.lock()
+        guard var r = rescue, r.key == key, !r.busy, now.timeIntervalSince(r.lastTry) >= 2 else { lock.unlock(); return }
+        if now > r.until { rescue = nil; lock.unlock(); return }
+        r.busy = true; r.lastTry = now
+        rescue = r
+        lock.unlock()
+
+        let pins = mapPins?(r.offer.app) // must run now, while this frame is still here
+        Task {
+            var dropoff: Coord?
+            var streets: String?
+            if let pins, !pins.customers.isEmpty {
+                if let me = store.currentLocation, let pc = r.pickup,
+                   let est = MapLocator.locate(pins: pins, me: me, store: pc, statedMiles: r.offer.miles) {
+                    dropoff = est.finalDropoff
+                } else if let s = await streetEstimate(lines: lines, pins: pins, pickup: r.pickup, offer: r.offer) {
+                    dropoff = s.coord; streets = s.names
+                }
+            }
+            var found = false
+            if let dropoff {
+                found = await finish(key: key, offer: r.offer, saved: r.saved, score: r.score, settings: r.settings,
+                                     prefs: r.prefs, pickup: r.pickup, dropoff: dropoff, estimated: true,
+                                     streets: streets, gate: nil)
+            }
+            lock.lock()
+            if found { rescue = nil } else if rescue?.key == key { rescue?.busy = false }
+            lock.unlock()
+        }
+    }
+
+    /// Places the customer pin at the two nearest street names printed on the map (e.g. after zooming in).
+    private func streetEstimate(lines: [OCRLine], pins: MapPins, pickup: Coord?, offer: Offer) async -> (coord: Coord, names: String)? {
+        guard let pin = StreetLabels.finalCustomer(pins) else { return nil }
+        let names = StreetLabels.nearest(lines: lines, to: pin)
+        guard names.count == 2 else { return nil }
+        let near = pickup ?? store.currentLocation
+        var town: String?
+        if let near, let place = await PlaceFinder.describe(near) { town = PlaceFinder.town(in: place) }
+        guard let c = await PlaceFinder.intersection(names[0], names[1], town: town, near: near),
+              StreetLabels.plausible(dropoff: c, pickup: pickup, me: store.currentLocation, statedMiles: offer.miles)
+        else { return nil }
+        return (c, "\(names[0]) & \(names[1])")
+    }
+
+    /// Saves the locations, runs the on-the-way check and posts the banner.
+    /// `gate` = first banner for this offer; nil = an update after the map was re-read.
+    /// Returns true when the customer was located.
+    @discardableResult
+    private func finish(key: String, offer: Offer, saved: OfferRecord, score: Score, settings: DriverSettings,
+                        prefs: NotificationPrefs, pickup: Coord?, dropoff: Coord?, estimated: Bool,
+                        streets: String?, gate: PostOnce?) async -> Bool {
+        let orderId = saved.id.uuidString
+        let dayKey = OfferLog.dayKey(saved.date)
+        let p = pickup.map { Stop(type: .pickup, label: offer.pickupText ?? "Pickup", location: $0, orderId: orderId) }
+        let d = dropoff.map {
+            Stop(type: .dropoff, label: estimated ? MapEstimate.label : (offer.dropoffText ?? "Dropoff"),
+                 location: $0, orderId: orderId)
+        }
+        guard currentKey == key else { return d != nil } // a newer offer replaced this one
+
+        let foundPickup = p?.location, foundDropoff = d?.location
+        log.update(id: saved.id, dayKey: dayKey) {
+            $0.pickupLocation = foundPickup
+            $0.dropoffLocation = foundDropoff
+            $0.dropoffEstimated = foundDropoff == nil ? nil : estimated
+        }
+
+        let planner = TripPlanner(stops: store.stops)
+        let otw = planner.checkOnTheWay(origin: store.currentLocation ?? pickup, pickup: p, dropoff: d,
+                                        pay: offer.pay, settings: settings)
+        let note = otw.message
+        log.update(id: saved.id, dayKey: dayKey) { $0.routeNote = note }
+        var canAdd = false
+        if let p, let d {
+            store.savePending(orderId: orderId, pickup: p, dropoff: d) // also sent to the cloud with the offer
+            canAdd = planner.canAdd(2)
+        }
+
+        var dropoffInfo: DropoffInfo?
+        if let d {
+            let miles = store.currentLocation.map { Geo.roadMiles($0, d.location) }
+            var place = offer.dropoffText ?? d.label
+            if estimated {
+                var named = streets
+                if named == nil { named = await PlaceFinder.describe(d.location) }
+                place = named ?? "customer pin"
+                let shown = place
+                log.update(id: saved.id, dayKey: dayKey) { $0.dropoffText = "≈ \(shown) (from map)" }
+            }
+            dropoffInfo = DropoffInfo(place: place, estimated: estimated, milesFromYou: miles)
+        }
+        guard currentKey == key else { return d != nil }
+
+        await Cloud.shared.queueOffer(id: saved.id, dayKey: dayKey) // route note + stops
+        let firstBanner = gate?.claim() ?? false
+        // Post the first banner, or an updated one (replaces the earlier banner) once the customer is found.
+        if firstBanner || d != nil {
+            OfferAlert.post(record: saved, offer: offer, score: score, settings: settings, prefs: prefs,
+                            otw: otw, canAddToRoute: canAdd, silent: false, dropoff: dropoffInfo)
+        }
+        return d != nil
     }
 }
 

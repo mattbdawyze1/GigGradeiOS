@@ -60,3 +60,5 @@ create table if not exists public.missed_offers (
 );
 create index if not exists missed_offers_date on public.missed_offers (date);
 alter table public.missed_offers enable row level security;
+grant all on public.missed_offers to service_role;
+notify pgrst, 'reload schema';

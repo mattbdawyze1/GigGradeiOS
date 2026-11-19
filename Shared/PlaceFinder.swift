@@ -47,6 +47,35 @@ enum PlaceFinder {
         return nil
     }
 
+    /// Where two streets cross ("Pheasant Ln" + "Partridge Ln" near the store). Only accepts a match that is
+    /// actually on one of those streets, never a town center or a whole-street guess.
+    static func intersection(_ a: String, _ b: String, town: String?, near: Coord?) async -> Coord? {
+        let suffix = town.map { ", \($0)" } ?? ""
+        let cores = [StreetLabels.core(a), StreetLabels.core(b)]
+        func onStreet(_ texts: [String?]) -> Bool {
+            let all = texts.compactMap { $0?.lowercased() }.joined(separator: " ")
+            return cores.contains { all.contains($0) }
+        }
+        for q in ["\(a) & \(b)\(suffix)", "\(a) and \(b)\(suffix)", "\(a) at \(b)\(suffix)"] {
+            let req = MKLocalSearch.Request()
+            req.naturalLanguageQuery = q
+            if let near { req.region = MKCoordinateRegion(center: near.cl, latitudinalMeters: 50_000, longitudinalMeters: 50_000) }
+            if let resp = try? await MKLocalSearch(request: req).start() {
+                let hits = resp.mapItems.filter { onStreet([$0.placemark.thoroughfare, $0.name]) }
+                    .map { Coord($0.placemark.coordinate) }
+                if let c = closest(hits, to: near) { return c }
+            }
+            let region = near.map { CLCircularRegion(center: $0.cl, radius: 50_000, identifier: "near") }
+            if let marks = try? await CLGeocoder().geocodeAddressString(q, in: region) {
+                let hits = marks.filter { onStreet([$0.thoroughfare, $0.name]) }
+                    .compactMap { $0.location?.coordinate }.map { Coord($0) }
+                    .filter { c in near.map { Geo.straightMiles($0, c) < 40 } ?? true }
+                if let c = closest(hits, to: near) { return c }
+            }
+        }
+        return nil
+    }
+
     /// Apple Maps search (good for business names and addresses).
     private static func search(_ query: String, near: Coord?) async -> Coord? {
         let req = MKLocalSearch.Request()

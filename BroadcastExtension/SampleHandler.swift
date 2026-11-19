@@ -117,6 +117,7 @@ class SampleHandler: RPBroadcastSampleHandler {
             || all.contains("missed offers")
             || all.contains("why no banner")
             || all.contains("what the screen reader read")
+            || all.contains("add an order")
         if ownScreen { return nil }
 
         // GigGrade's banner: lines near the top with its kind of content ($, /hr, /mi, miles, minutes,
@@ -153,7 +154,11 @@ class SampleHandler: RPBroadcastSampleHandler {
             }
             CVPixelBufferUnlockBaseAddress(pixelBuffer, .readOnly)
         }
-        let out = kept.enumerated().map { OCRLine($0.element.text, emphasis: emphasis[$0.offset]) }
+        // Line centers in pixels (same space as the map pins), so map street names can be matched to a pin.
+        let w = Double(CVPixelBufferGetWidth(pixelBuffer)), h = Double(CVPixelBufferGetHeight(pixelBuffer))
+        let out = kept.enumerated().map { i, l in
+            OCRLine(l.text, emphasis: emphasis[i], x: Double(l.box.midX) * w, y: (1 - Double(l.box.midY)) * h)
+        }
         return Screen(lines: out, bannerBottom: bannerBottom, cardTop: cardTop)
     }
 
