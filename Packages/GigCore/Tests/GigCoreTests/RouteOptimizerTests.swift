@@ -78,7 +78,14 @@ final class RouteOptimizerTests: XCTestCase {
     }
 
     func testNineStopsIsQuick() {
-        let stops = (0..<9).map { i in stop(i % 2 == 0 ? .pickup : .dropoff, "O\(i / 2)", Double((i * 37) % 11), Double((i * 53) % 7)) }
+        var stops: [Stop] = []
+        for i in 0..<9 {
+            let type: StopType = i % 2 == 0 ? .pickup : .dropoff
+            let order = "O" + String(i / 2)
+            let x = Double((i * 37) % 11)
+            let y = Double((i * 53) % 7)
+            stops.append(stop(type, order, x, y))
+        }
         let cost = stops.map { a in stops.map { b in dist(a, b) } }
         let r = RouteOptimizer.optimize(stops: stops, cost: cost, fromStart: nil)
         XCTAssertNotNil(r)
