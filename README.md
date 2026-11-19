@@ -27,6 +27,12 @@ The app reads gig offers live from your screen through iOS screen broadcasting (
 
 > The Offers log, screenshots and timer are shared between the screen reader and the app through the App Group. With a free Apple ID (Sideloadly) iOS may strip the App Group; if the Offers tab stays empty while banners still appear, that's why. TestFlight fixes it.
 
+## Version 5.0: Optimize route + linked stops
+
+- **Optimize route** button on the Route tab: gets real driving times between your stops from Apple Maps (the closest pairs are measured, the rest estimated from them, because Apple limits requests per minute), then checks every valid stop order (dynamic programming over subsets) and picks the fastest. With up to 9 stops that's the true best order, not a guess.
+- Keeps your order if the best one saves under 30 seconds. **Undo** puts the old order back.
+- **Linking:** tap 🔗 on a dropoff to link it to a pickup (or unlink it). Linked stops share a letter (A, B, C…) in the list and on the map. A linked dropoff always stays after its pickup, both when you drag and when you optimize. Linking a dropoff that sits above its pickup moves it just below. Offers accepted from a banner are linked automatically; one pickup can have several dropoffs.
+
 ## Version 4.9: zoom in to finish the on-the-way check
 
 - If the customer pin couldn't be placed, GigGrade keeps re-reading the map every 2 seconds for up to 90 seconds while the offer stays on screen.

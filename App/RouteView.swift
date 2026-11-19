@@ -2,7 +2,7 @@ import SwiftUI
 import MapKit
 import GigCore
 
-/// Your current route: you -> up to 4 pickups/dropoffs, drawn on real roads with Apple Maps.
+/// Your current route: you -> up to 9 pickups/dropoffs, drawn on real roads with Apple Maps.
 @MainActor
 final class RouteModel: ObservableObject {
     @Published var stops: [Stop] = []
@@ -40,6 +40,81 @@ final class RouteModel: ObservableObject {
         reload(force: true)
         Task { await Cloud.shared.schedulePushState() }
         return nil
+    }
+
+    // MARK: Optimize (fastest order, pickups before their linked dropoffs)
+
+    @Published var optimizing = false
+    @Published var undoOrder: [Stop]?
+
+    func optimize() async -> String {
+        let current = store.stops
+        guard current.count >= 2 else { return "Add at least 2 stops to optimize." }
+        optimizing = true
+        defer { optimizing = false }
+        let times = await TravelTimes.matrix(start: store.currentLocation, points: current.map(\.location))
+        guard let r = RouteOptimizer.optimize(stops: current, cost: times.cost, fromStart: times.fromStart,
+                                              keepIfWithin: 30) else {
+            return "Couldn't optimize this route."
+        }
+        let minutes = Int((r.improvement / 60).rounded())
+        if r.order == Array(current.indices) {
+            return "Already the fastest order (≈ \(Int((r.cost / 60).rounded())) min driving)."
+        }
+        guard store.stops == current else { return "The route changed while optimizing. Tap Optimize again." }
+        var planner = TripPlanner(stops: current)
+        guard planner.reorder(r.order.map { current[$0] }) else { return "Couldn't optimize this route." }
+        undoOrder = current
+        store.stops = planner.stops
+        reload(force: true)
+        Task { await Cloud.shared.schedulePushState() }
+        let saved = minutes >= 1 ? "saves about \(minutes) min" : "saves under a minute"
+        return "Optimized: \(saved) (≈ \(Int((r.cost / 60).rounded())) min driving)."
+    }
+
+    func undoOptimize() {
+        guard let old = undoOrder else { return }
+        undoOrder = nil
+        var planner = TripPlanner(stops: store.stops)
+        // Only if the same stops are still there (none finished or added since).
+        guard planner.reorder(old.compactMap { o in store.stops.first { $0.id == o.id } }) else { return }
+        store.stops = planner.stops
+        reload(force: true)
+        Task { await Cloud.shared.schedulePushState() }
+    }
+
+    // MARK: Linking (a linked dropoff always stays after its pickup)
+
+    /// Letter shown on linked stops: stops sharing an order with both a pickup and a dropoff get A, B, C…
+    var linkLetters: [String: String] {
+        var letters: [String: String] = [:]
+        let alphabet = Array("ABCDEFGHIJ")
+        for s in stops where letters[s.orderId] == nil {
+            let group = stops.filter { $0.orderId == s.orderId }
+            guard group.contains(where: { $0.type == .pickup }), group.contains(where: { $0.type == .dropoff }) else { continue }
+            letters[s.orderId] = String(alphabet[min(letters.count, alphabet.count - 1)])
+        }
+        return letters
+    }
+
+    /// Link a dropoff to a pickup (nil = unlink). If the dropoff was above its pickup, it moves just below it.
+    func link(_ dropoff: Stop, to pickup: Stop?) {
+        var newStops = store.stops
+        guard let di = newStops.firstIndex(where: { $0.id == dropoff.id }) else { return }
+        newStops[di].orderId = pickup?.orderId ?? UUID().uuidString
+        if !TripPlanner.isValidOrder(newStops), let pickup {
+            let moved = newStops.remove(at: di)
+            if let pi = newStops.firstIndex(where: { $0.id == pickup.id }) {
+                newStops.insert(moved, at: pi + 1)
+            } else {
+                newStops.append(moved)
+            }
+        }
+        guard TripPlanner.isValidOrder(newStops) else { return }
+        store.stops = newStops
+        undoOrder = nil
+        reload(force: true)
+        Task { await Cloud.shared.schedulePushState() }
     }
 
     func remove(at offsets: IndexSet) {
@@ -122,6 +197,78 @@ final class RouteModel: ObservableObject {
     }
 }
 
+/// Driving times between stops from Apple Maps (its routing engine finds the fastest road path for each pair).
+/// Apple limits how many requests an app can make per minute, so the closest pairs are measured
+/// and the rest are estimated from those measurements.
+enum TravelTimes {
+    struct Matrix {
+        var cost: [[Double]]        // seconds, stop i -> stop j
+        var fromStart: [Double]?    // seconds, you -> stop j (nil without a location)
+        var measured: Int
+    }
+
+    static let maxRequests = 36
+
+    static func matrix(start: Coord?, points: [Coord]) async -> Matrix {
+        let nodes = (start.map { [$0] } ?? []) + points
+        let off = start == nil ? 0 : 1
+        let m = nodes.count
+        func straight(_ i: Int, _ j: Int) -> Double { Geo.straightMiles(nodes[i], nodes[j]) }
+
+        // Closest pairs first (they decide most of the order). Nobody drives back to the start.
+        var pairs: [(Int, Int)] = []
+        for i in 0..<m {
+            for j in 0..<m where j != i && !(off == 1 && j == 0) { pairs.append((i, j)) }
+        }
+        pairs.sort { straight($0.0, $0.1) < straight($1.0, $1.1) }
+        // Measure one direction per pair first; the reverse is usually about the same.
+        var chosen: [(Int, Int)] = []
+        var seen = Set<String>()
+        for (i, j) in pairs where chosen.count < maxRequests {
+            let k = "\(min(i, j))-\(max(i, j))"
+            if seen.insert(k).inserted { chosen.append((i, j)) }
+        }
+
+        var secs = [[Double?]](repeating: [Double?](repeating: nil, count: m), count: m)
+        var index = 0
+        while index < chosen.count {
+            let batch = Array(chosen[index..<min(index + 6, chosen.count)])
+            index += batch.count
+            await withTaskGroup(of: (Int, Int, Double?).self) { group in
+                for (i, j) in batch {
+                    let a = nodes[i], b = nodes[j]
+                    group.addTask { (i, j, await eta(a, b)) }
+                }
+                for await (i, j, t) in group { secs[i][j] = t }
+            }
+        }
+
+        // Seconds per straight-line mile, learned from the measured pairs (for the ones not measured).
+        var rates: [Double] = []
+        for i in 0..<m { for j in 0..<m { if let t = secs[i][j], straight(i, j) > 0.05 { rates.append(t / straight(i, j)) } } }
+        rates.sort()
+        let rate = rates.isEmpty ? 150 : rates[rates.count / 2]
+        let measured = rates.count
+
+        func time(_ i: Int, _ j: Int) -> Double {
+            if i == j { return 0 }
+            return secs[i][j] ?? secs[j][i] ?? straight(i, j) * rate
+        }
+        let n = points.count
+        let cost = (0..<n).map { i in (0..<n).map { j in time(i + off, j + off) } }
+        let fromStart = off == 1 ? (0..<n).map { time(0, $0 + 1) } : nil
+        return Matrix(cost: cost, fromStart: fromStart, measured: measured)
+    }
+
+    static func eta(_ a: Coord, _ b: Coord) async -> Double? {
+        let req = MKDirections.Request()
+        req.source = MKMapItem(placemark: MKPlacemark(coordinate: a.cl))
+        req.destination = MKMapItem(placemark: MKPlacemark(coordinate: b.cl))
+        req.transportType = .automobile
+        return try? await MKDirections(request: req).calculateETA().expectedTravelTime
+    }
+}
+
 struct RouteView: View {
     @StateObject private var model = RouteModel()
     @State private var camera: MapCameraPosition = .automatic
@@ -131,6 +278,7 @@ struct RouteView: View {
     @StateObject private var completer = AddressCompleter()
     @State private var editMode: EditMode = .inactive
     @State private var showBatchNote = false
+    @State private var optimizeNote: String?
     @FocusState private var typing: Bool
     @Environment(\.scenePhase) private var scenePhase
     private let tick = Timer.publish(every: 4, on: .main, in: .common).autoconnect()
@@ -144,8 +292,9 @@ struct RouteView: View {
                             Image(systemName: "location.circle.fill").font(.title).foregroundStyle(.blue)
                         }
                     }
+                    let letters = model.linkLetters
                     ForEach(Array(model.stops.enumerated()), id: \.element.id) { i, s in
-                        Marker("\(i + 1). \(s.type == .pickup ? "Pickup" : "Dropoff")", coordinate: s.location.cl)
+                        Marker(markerTitle(i, s, letters), coordinate: s.location.cl)
                             .tint(s.type == .pickup ? .blue : .green)
                     }
                     ForEach(model.legs, id: \.self) { leg in
@@ -155,14 +304,72 @@ struct RouteView: View {
                 .frame(maxHeight: .infinity)
 
                 List {
+                    if model.stops.count >= 2 && editMode == .inactive {
+                        Section {
+                            HStack(spacing: 10) {
+                                Button {
+                                    Task { optimizeNote = await model.optimize() }
+                                } label: {
+                                    HStack {
+                                        if model.optimizing { ProgressView() } else { Image(systemName: "wand.and.stars") }
+                                        Text(model.optimizing ? "Finding the fastest order…" : "Optimize route")
+                                    }
+                                    .frame(maxWidth: .infinity)
+                                }
+                                .buttonStyle(.borderedProminent)
+                                .disabled(model.optimizing)
+                                if model.undoOrder != nil {
+                                    Button("Undo") { model.undoOptimize(); optimizeNote = nil }
+                                        .buttonStyle(.bordered)
+                                }
+                            }
+                            if let optimizeNote {
+                                Text(optimizeNote).font(.footnote).foregroundStyle(.secondary)
+                            }
+                        }
+                    }
                     Section {
+                        let letters = model.linkLetters
+                        let pickups = model.stops.enumerated().filter { $0.element.type == .pickup }
                         ForEach(Array(model.stops.enumerated()), id: \.element.id) { i, s in
                             HStack {
                                 Image(systemName: s.type == .pickup ? "bag.fill" : "house.fill")
                                     .foregroundStyle(s.type == .pickup ? .blue : .green)
                                 Text("\(i + 1). \(s.label)").lineLimit(1)
+                                if let letter = letters[s.orderId] {
+                                    Text(letter)
+                                        .font(.caption2.weight(.bold))
+                                        .foregroundStyle(.white)
+                                        .frame(width: 18, height: 18)
+                                        .background(Circle().fill(.orange))
+                                }
                                 Spacer()
                                 if editMode == .inactive {
+                                    if s.type == .dropoff && !pickups.isEmpty {
+                                        Menu {
+                                            ForEach(pickups, id: \.element.id) { pi, p in
+                                                Button {
+                                                    model.link(s, to: p)
+                                                } label: {
+                                                    if p.orderId == s.orderId {
+                                                        Label("\(pi + 1). \(p.label)", systemImage: "checkmark")
+                                                    } else {
+                                                        Text("\(pi + 1). \(p.label)")
+                                                    }
+                                                }
+                                            }
+                                            if letters[s.orderId] != nil {
+                                                Button(role: .destructive) { model.link(s, to: nil) } label: {
+                                                    Label("Unlink", systemImage: "link.badge.minus")
+                                                }
+                                            }
+                                        } label: {
+                                            Image(systemName: letters[s.orderId] == nil ? "link" : "link.circle.fill")
+                                                .font(.title3)
+                                        }
+                                        .menuStyle(.button)
+                                        .buttonStyle(.borderless)
+                                    }
                                     Button("Done") { model.complete(s) }.buttonStyle(.bordered)
                                 }
                             }
@@ -184,6 +391,8 @@ struct RouteView: View {
                     } footer: {
                         if editMode == .active {
                             Text("Drag ≡ to change the order. Swipe left to remove a stop. A dropoff can't go before its own pickup.")
+                        } else if model.stops.contains(where: { $0.type == .dropoff }) {
+                            Text("Tap 🔗 on a dropoff to link it to its pickup. Linked stops share a letter, and the dropoff always stays after its pickup, including when you optimize. Offers you accept are linked automatically.")
                         }
                     }
                     Section {
@@ -231,7 +440,7 @@ struct RouteView: View {
                     }
                 }
                 .environment(\.editMode, $editMode)
-                .frame(height: 380)
+                .frame(height: 420)
             }
             .navigationTitle("Route")
             .navigationBarTitleDisplayMode(.inline)
@@ -284,6 +493,12 @@ struct RouteView: View {
                 message = "Couldn't find that place. Try another suggestion."
             }
         }
+    }
+
+    private func markerTitle(_ i: Int, _ s: Stop, _ letters: [String: String]) -> String {
+        let kind = s.type == .pickup ? "Pickup" : "Dropoff"
+        if let letter = letters[s.orderId] { return "\(i + 1). \(kind) \(letter)" }
+        return "\(i + 1). \(kind)"
     }
 
     private func reset() {
