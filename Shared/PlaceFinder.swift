@@ -76,6 +76,25 @@ enum PlaceFinder {
         return nil
     }
 
+    /// Every match for an address without a town ("54 Elderwood Lane") within 40 mi, so the caller can pick
+    /// the right one using the map.
+    static func candidates(_ query: String, near: Coord?) async -> [Coord] {
+        var found: [Coord] = []
+        let req = MKLocalSearch.Request()
+        req.naturalLanguageQuery = query
+        req.resultTypes = .address
+        if let near { req.region = MKCoordinateRegion(center: near.cl, latitudinalMeters: 50_000, longitudinalMeters: 50_000) }
+        if let resp = try? await MKLocalSearch(request: req).start() {
+            found += resp.mapItems.map { Coord($0.placemark.coordinate) }
+        }
+        let region = near.map { CLCircularRegion(center: $0.cl, radius: 50_000, identifier: "near") }
+        if let marks = try? await CLGeocoder().geocodeAddressString(query, in: region) {
+            found += marks.compactMap { $0.location?.coordinate }.map { Coord($0) }
+        }
+        guard let near else { return found }
+        return found.filter { Geo.straightMiles(near, $0) < 40 }
+    }
+
     /// Apple Maps search (good for business names and addresses).
     private static func search(_ query: String, near: Coord?) async -> Coord? {
         let req = MKLocalSearch.Request()

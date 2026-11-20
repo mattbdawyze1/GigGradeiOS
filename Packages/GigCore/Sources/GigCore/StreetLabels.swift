@@ -62,6 +62,32 @@ public enum StreetLabels {
         (a.x - b.x) * (a.x - b.x) + (a.y - b.y) * (a.y - b.y)
     }
 
+    // MARK: Address bubble (tap the customer pin on DoorDash's map: "54 Elderwood Lane")
+
+    private static let houseAddress = Rx(#"^\d{1,6}[a-z]?\s+[a-z0-9]"#)
+
+    /// "54 Elderwood Lane" → true. Card addresses have commas ("110 Commack Road, Commack, 11725 NY") → false.
+    public static func isHouseAddress(_ raw: String) -> Bool {
+        let t = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard t.count >= 6, t.count <= 40, !t.contains(","), houseAddress.first(t) != nil else { return false }
+        if noise.first(t) != nil { return false }
+        let rest = t.split(separator: " ").dropFirst().joined(separator: " ")
+        return suffix.first(rest) != nil || numbered.first(rest) != nil
+    }
+
+    /// The address bubble on the map, if one is showing (it sits above the card, so it has a screen position).
+    public static func popupAddress(_ lines: [OCRLine]) -> OCRLine? {
+        lines.first { $0.x != nil && $0.y != nil && isHouseAddress($0.text) }
+    }
+
+    /// The customer pin the bubble belongs to: the closest one just below it.
+    public static func pin(under popup: OCRLine, in pins: MapPins) -> MapPins.Point? {
+        guard let px = popup.x, let py = popup.y else { return nil }
+        return pins.customers
+            .filter { $0.y > py }
+            .min { abs($0.x - px) + ($0.y - py) < abs($1.x - px) + ($1.y - py) }
+    }
+
     /// Is a dropoff this far away believable for an offer with these miles? (Offer miles include the drive to the store.)
     public static func plausible(dropoff: Coord, pickup: Coord?, me: Coord?, statedMiles: Double?) -> Bool {
         guard let miles = statedMiles, miles > 0 else { return true }

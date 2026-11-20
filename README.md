@@ -27,6 +27,20 @@ The app reads gig offers live from your screen through iOS screen broadcasting (
 
 > The Offers log, screenshots and timer are shared between the screen reader and the app through the App Group. With a free Apple ID (Sideloadly) iOS may strip the App Group; if the Offers tab stays empty while banners still appear, that's why. TestFlight fixes it.
 
+## Version 5.2: DoorDash route check waits for your tap
+
+- DoorDash offers: the first banner goes out right away with the grade and rates, and line 3 says "📍 Tap the customer pin for the route check". The map is still read in the background, silently.
+- Tap the customer pin: one banner with the verdict, from the exact address, or from the map's estimate if the address can't be found. It's sent even if the verdict matches the map's.
+- After that, another banner only if the verdict changes (e.g. you tap a different customer).
+- Uber and other apps are unchanged.
+
+## Version 5.1: DoorDash address bubble
+
+- While a DoorDash offer is up, tap a customer pin on its map. GigGrade reads the address bubble ("54 Elderwood Lane") and pins that customer exactly, picking the right street with the map's estimate (within 1.5 mi) or the offer's miles.
+- Tapped the last customer (or the only one): its address becomes the final stop, labeled with the real address (no ≈).
+- Tapped a different customer on a multi-dropoff offer: its exact address plus the store pin place the last customer on the map.
+- Works even after a verdict. An updated banner goes out only if the verdict itself changes (e.g. OFF ROUTE → ON THE WAY).
+
 ## Version 5.0: Optimize route + linked stops
 
 - **Optimize route** button on the Route tab: gets real driving times between your stops from Apple Maps (the closest pairs are measured, the rest estimated from them, because Apple limits requests per minute), then checks every valid stop order (dynamic programming over subsets) and picks the fastest. With up to 9 stops that's the true best order, not a guess.

@@ -137,12 +137,15 @@ final class OfferPipeline {
         Task { await Cloud.shared.queueOffer(id: record.id, dayKey: dayKey) }
 
         // ONE banner per offer: wait for the on-the-way check, but never more than 3.5 s.
+        // DoorDash: the banner goes out right away, and the route check waits until you tap the customer pin.
         let saved = record
         let gate = PostOnce()
-        DispatchQueue.global().asyncAfter(deadline: .now() + 3.5) { [weak self] in
+        let holdVerdict = offer.app == .doordash
+        DispatchQueue.global().asyncAfter(deadline: .now() + (holdVerdict ? 0 : 3.5)) { [weak self] in
             guard let self, self.currentKey == key, gate.claim() else { return }
             OfferAlert.post(record: saved, offer: offer, score: score, settings: settings, prefs: prefs,
-                            otw: nil, canAddToRoute: false, silent: false)
+                            otw: nil, canAddToRoute: false, silent: false,
+                            hint: holdVerdict ? OfferAlert.tapPinHint : nil)
         }
 
         // 2) Locate pickup/dropoff (text first, map as backup and cross-check), run the check, post.
@@ -178,23 +181,28 @@ final class OfferPipeline {
                 }
             }
 
-            let found = await self.finish(key: key, offer: offer, saved: saved, score: score, settings: settings,
-                                          prefs: prefs, pickup: pickupCoord, dropoff: dropoffCoord,
-                                          estimated: estimated, streets: streets, gate: gate)
-            if !found {
-                // Couldn't place the customer yet: keep re-reading the map while this offer stays on screen
-                // (zoom in on the customer pin to help), and send an updated banner when it works.
-                self.lock.lock()
-                if self.lastKey == key {
-                    self.rescue = Rescue(key: key, offer: offer, saved: saved, score: score, settings: settings,
-                                         prefs: prefs, pickup: pickupCoord, until: Date().addingTimeInterval(90))
-                }
-                self.lock.unlock()
+            let done = await self.finish(key: key, offer: offer, saved: saved, score: score, settings: settings,
+                                         prefs: prefs, pickup: pickupCoord, dropoff: dropoffCoord,
+                                         estimated: estimated, streets: streets, gate: gate,
+                                         announce: !holdVerdict)
+            // Keep watching this offer while it stays on screen (up to 90 s):
+            // - customer not placed yet: re-read the map every 2 s (zoom in on the customer pin to help);
+            // - DoorDash: tap a customer pin and its address bubble ("54 Elderwood Lane") is used to pin it exactly.
+            // DoorDash: the verdict banner goes out when you tap the pin (exact address, or the map's
+            // estimate if the address can't be found). Later: an updated banner only when the verdict changes.
+            self.lock.lock()
+            if self.lastKey == key {
+                self.rescue = Rescue(key: key, offer: offer, saved: saved, score: score, settings: settings,
+                                     prefs: prefs, pickup: pickupCoord, until: Date().addingTimeInterval(90),
+                                     located: done.found, note: done.note, dropoff: dropoffCoord,
+                                     dropoffEstimated: estimated, holdVerdict: holdVerdict,
+                                     verdictSent: !holdVerdict)
             }
+            self.lock.unlock()
         }
     }
 
-    // MARK: Retry the map while the offer stays up (zoomed-in map, map that was still loading)
+    // MARK: Keep improving the check while the offer stays up (zoomed-in map, tapped address bubble)
 
     private struct Rescue {
         let key: String
@@ -205,42 +213,120 @@ final class OfferPipeline {
         let prefs: NotificationPrefs
         let pickup: Coord?
         let until: Date
+        var located: Bool
+        var note: String?
+        var dropoff: Coord?
+        var dropoffEstimated: Bool
+        let holdVerdict: Bool        // DoorDash: no verdict banner until you tap the customer pin
+        var verdictSent: Bool
+        var addresses = Set<String>()
         var lastTry = Date.distantPast
         var busy = false
     }
     private var rescue: Rescue?
 
-    /// Called for every scan of an offer that already has its banner. Returns quickly unless a retry is due.
+    /// Called for every scan of an offer that already has its banner. Returns quickly unless there's work to do.
     private func retryIfNeeded(key: String, lines: [OCRLine], mapPins: ((GigApp) -> MapPins?)?, now: Date) {
         lock.lock()
-        guard var r = rescue, r.key == key, !r.busy, now.timeIntervalSince(r.lastTry) >= 2 else { lock.unlock(); return }
+        guard var r = rescue, r.key == key, !r.busy else { lock.unlock(); return }
         if now > r.until { rescue = nil; lock.unlock(); return }
-        r.busy = true; r.lastTry = now
+        let popup = r.offer.app == .doordash ? StreetLabels.popupAddress(lines) : nil
+        let popupKey = popup?.text.lowercased()
+        let newPopup = popupKey.map { !r.addresses.contains($0) } ?? false
+        let mapDue = !r.located && now.timeIntervalSince(r.lastTry) >= 2
+        guard newPopup || mapDue else { lock.unlock(); return }
+        r.busy = true
+        if mapDue { r.lastTry = now }
+        if newPopup, let popupKey { r.addresses.insert(popupKey) }
         rescue = r
         lock.unlock()
 
         let pins = mapPins?(r.offer.app) // must run now, while this frame is still here
         Task {
-            var dropoff: Coord?
-            var streets: String?
-            if let pins, !pins.customers.isEmpty {
+            var place: (coord: Coord, estimated: Bool, label: String?, streets: String?)?
+            if newPopup, let popup {
+                place = await addressEstimate(popup, pins: pins, r)
+            }
+            if place == nil, mapDue, let pins, !pins.customers.isEmpty {
                 if let me = store.currentLocation, let pc = r.pickup,
                    let est = MapLocator.locate(pins: pins, me: me, store: pc, statedMiles: r.offer.miles) {
-                    dropoff = est.finalDropoff
+                    place = (est.finalDropoff, true, nil, nil)
                 } else if let s = await streetEstimate(lines: lines, pins: pins, pickup: r.pickup, offer: r.offer) {
-                    dropoff = s.coord; streets = s.names
+                    place = (s.coord, true, nil, s.names)
                 }
             }
-            var found = false
-            if let dropoff {
-                found = await finish(key: key, offer: r.offer, saved: r.saved, score: r.score, settings: r.settings,
-                                     prefs: r.prefs, pickup: r.pickup, dropoff: dropoff, estimated: true,
-                                     streets: streets, gate: nil)
+            let tapped = newPopup
+            let announce = !r.holdVerdict || tapped || r.verdictSent
+            let force = tapped && !r.verdictSent // first tap: always send the verdict, changed or not
+            var done: (found: Bool, note: String?)?
+            if let place {
+                done = await finish(key: key, offer: r.offer, saved: r.saved, score: r.score, settings: r.settings,
+                                    prefs: r.prefs, pickup: r.pickup, dropoff: place.coord, estimated: place.estimated,
+                                    streets: place.streets, gate: nil, dropoffLabel: place.label,
+                                    previousNote: r.note, announce: announce, force: force)
+            } else if force {
+                // The address couldn't be used: send the best verdict there is (the map's estimate, or "couldn't locate").
+                done = await finish(key: key, offer: r.offer, saved: r.saved, score: r.score, settings: r.settings,
+                                    prefs: r.prefs, pickup: r.pickup, dropoff: r.dropoff, estimated: r.dropoffEstimated,
+                                    streets: nil, gate: nil, previousNote: r.note, announce: true, force: true)
             }
             lock.lock()
-            if found { rescue = nil } else if rescue?.key == key { rescue?.busy = false }
+            if rescue?.key == key {
+                rescue?.busy = false
+                if let done {
+                    if done.note != nil { rescue?.note = done.note }
+                    if force { rescue?.verdictSent = true }
+                    if done.found, let place {
+                        rescue?.located = true
+                        rescue?.dropoff = place.coord
+                        rescue?.dropoffEstimated = place.estimated
+                    }
+                }
+            }
             lock.unlock()
         }
+    }
+
+    /// DoorDash's address bubble ("54 Elderwood Lane", shown after tapping a customer pin).
+    /// - Tapped the last customer (or the only one): that address is the final stop, exactly.
+    /// - Tapped another customer: its exact address plus the store pin place the last customer on the map.
+    private func addressEstimate(_ popup: OCRLine, pins: MapPins?, _ r: Rescue)
+        async -> (coord: Coord, estimated: Bool, label: String?, streets: String?)? {
+        let anchor = r.pickup ?? store.currentLocation
+        let candidates = await PlaceFinder.candidates(popup.text, near: anchor)
+        guard !candidates.isEmpty else { return nil }
+
+        let tapped = pins.flatMap { StreetLabels.pin(under: popup, in: $0) }
+        let last = pins.flatMap { StreetLabels.finalCustomer($0) }
+        let isLast = tapped == nil || last == nil || tapped == last || (pins?.customers.count ?? 0) <= 1
+
+        // Pick the right "54 Elderwood Lane": next to the map's estimate when there is one, else nearest the store.
+        var address: Coord?
+        if isLast, let est = r.dropoff, r.dropoffEstimated {
+            address = candidates.filter { Geo.straightMiles($0, est) <= 1.5 }
+                .min { Geo.straightMiles($0, est) < Geo.straightMiles($1, est) }
+        }
+        if address == nil {
+            let fits = candidates.filter {
+                StreetLabels.plausible(dropoff: $0, pickup: r.pickup, me: store.currentLocation, statedMiles: r.offer.miles)
+            }
+            address = anchor.map { a in fits.min { Geo.straightMiles($0, a) < Geo.straightMiles($1, a) } } ?? fits.first
+        }
+        guard let address else { return nil }
+        if isLast { return (address, false, popup.text, nil) }
+
+        guard let pins, let tapped, let last else { return nil }
+        if let storeP = pins.stores.first, let pc = r.pickup,
+           let solved = MapLocator.solve(refA: tapped, worldA: address, refB: storeP, worldB: pc, targets: [last]),
+           let c = solved.coords.first {
+            return (c, true, nil, nil)
+        }
+        if let meP = pins.me, let me = store.currentLocation,
+           let solved = MapLocator.solve(refA: tapped, worldA: address, refB: meP, worldB: me, targets: [last]),
+           let c = solved.coords.first {
+            return (c, true, nil, nil)
+        }
+        return nil
     }
 
     /// Places the customer pin at the two nearest street names printed on the map (e.g. after zooming in).
@@ -263,15 +349,17 @@ final class OfferPipeline {
     @discardableResult
     private func finish(key: String, offer: Offer, saved: OfferRecord, score: Score, settings: DriverSettings,
                         prefs: NotificationPrefs, pickup: Coord?, dropoff: Coord?, estimated: Bool,
-                        streets: String?, gate: PostOnce?) async -> Bool {
+                        streets: String?, gate: PostOnce?, dropoffLabel: String? = nil,
+                        previousNote: String? = nil, announce: Bool = true,
+                        force: Bool = false) async -> (found: Bool, note: String?) {
         let orderId = saved.id.uuidString
         let dayKey = OfferLog.dayKey(saved.date)
         let p = pickup.map { Stop(type: .pickup, label: offer.pickupText ?? "Pickup", location: $0, orderId: orderId) }
         let d = dropoff.map {
-            Stop(type: .dropoff, label: estimated ? MapEstimate.label : (offer.dropoffText ?? "Dropoff"),
+            Stop(type: .dropoff, label: dropoffLabel ?? (estimated ? MapEstimate.label : (offer.dropoffText ?? "Dropoff")),
                  location: $0, orderId: orderId)
         }
-        guard currentKey == key else { return d != nil } // a newer offer replaced this one
+        guard currentKey == key else { return (d != nil, nil) } // a newer offer replaced this one
 
         let foundPickup = p?.location, foundDropoff = d?.location
         log.update(id: saved.id, dayKey: dayKey) {
@@ -294,8 +382,10 @@ final class OfferPipeline {
         var dropoffInfo: DropoffInfo?
         if let d {
             let miles = store.currentLocation.map { Geo.roadMiles($0, d.location) }
-            var place = offer.dropoffText ?? d.label
-            if estimated {
+            var place = dropoffLabel ?? offer.dropoffText ?? d.label
+            if let dropoffLabel, !estimated {
+                log.update(id: saved.id, dayKey: dayKey) { $0.dropoffText = dropoffLabel } // exact address
+            } else if estimated {
                 var named = streets
                 if named == nil { named = await PlaceFinder.describe(d.location) }
                 place = named ?? "customer pin"
@@ -304,16 +394,28 @@ final class OfferPipeline {
             }
             dropoffInfo = DropoffInfo(place: place, estimated: estimated, milesFromYou: miles)
         }
-        guard currentKey == key else { return d != nil }
+        guard currentKey == key else { return (d != nil, note) }
 
         await Cloud.shared.queueOffer(id: saved.id, dayKey: dayKey) // route note + stops
-        let firstBanner = gate?.claim() ?? false
-        // Post the first banner, or an updated one (replaces the earlier banner) once the customer is found.
-        if firstBanner || d != nil {
+        let post: Bool
+        if !announce {
+            post = false // DoorDash before you tap the customer pin: checked and saved, but no verdict banner yet
+        } else if force {
+            post = true
+        } else if let gate {
+            // First banner, or (if the 3.5 s banner already went out without a verdict) an update with it.
+            post = gate.claim() || d != nil
+        } else {
+            // Later improvement: only bother you if the verdict itself changed (ON THE WAY → OFF ROUTE, etc.),
+            // not when only the miles shift a little.
+            func verdict(_ n: String?) -> String? { n?.split(separator: ":").first.map(String.init) }
+            post = d != nil && verdict(note) != verdict(previousNote)
+        }
+        if post {
             OfferAlert.post(record: saved, offer: offer, score: score, settings: settings, prefs: prefs,
                             otw: otw, canAddToRoute: canAdd, silent: false, dropoff: dropoffInfo)
         }
-        return d != nil
+        return (d != nil, note)
     }
 }
 

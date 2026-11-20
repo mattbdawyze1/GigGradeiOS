@@ -24,6 +24,8 @@ enum OfferAlert {
     static let acceptRouteAction = "ACCEPTED_ADD_ROUTE"
     static let declineAction = "DECLINED"
     static let requestId = "giggrade.offer" // same ID = a new offer replaces the old banner
+    /// DoorDash: the route check waits until you tap the customer pin on the offer map.
+    static let tapPinHint = "📍 Tap the customer pin for the route check"
 
     static func registerCategories() {
         let accept = UNNotificationAction(identifier: acceptAction, title: "✓ Accepted", options: [])
@@ -46,7 +48,7 @@ enum OfferAlert {
 
     /// Text for each banner item (empty when it doesn't apply to this offer).
     static func values(_ o: Offer, _ s: Score, _ settings: DriverSettings, _ p: NotificationPrefs,
-                       _ otw: TripPlanner.OnTheWay?, _ dropoff: DropoffInfo?) -> [BannerItem: String] {
+                       _ otw: TripPlanner.OnTheWay?, _ dropoff: DropoffInfo?, hint: String? = nil) -> [BannerItem: String] {
         var v: [BannerItem: String] = [:]
         v[.color] = "\(s.category.dot) \(s.category.label)"
         v[.grade] = s.grade
@@ -65,14 +67,15 @@ enum OfferAlert {
         if let mi = o.miles { v[.miles] = String(format: "%.1f mi", mi) }
         if let mn = o.minutes { v[.minutes] = "\(mn) min" }
         if let net = s.netPay { v[.net] = String(format: "net $%.2f", net) }
-        if let otw { v[.verdict] = otw.shortMessage }
+        if let otw { v[.verdict] = otw.shortMessage } else if let hint { v[.verdict] = hint }
         if let dropoff { v[.dropoff] = dropoff.line }
         return v
     }
 
     static func content(_ o: Offer, _ s: Score, _ settings: DriverSettings, _ p: NotificationPrefs,
-                        _ otw: TripPlanner.OnTheWay?, dropoff: DropoffInfo? = nil) -> (title: String, subtitle: String, body: String) {
-        p.effectiveLayout.compose(values(o, s, settings, p, otw, dropoff))
+                        _ otw: TripPlanner.OnTheWay?, dropoff: DropoffInfo? = nil,
+                        hint: String? = nil) -> (title: String, subtitle: String, body: String) {
+        p.effectiveLayout.compose(values(o, s, settings, p, otw, dropoff, hint: hint))
     }
 
     static func sound(_ choice: SoundChoice) -> UNNotificationSound? {
@@ -87,9 +90,9 @@ enum OfferAlert {
 
     static func post(record: OfferRecord, offer: Offer, score: Score, settings: DriverSettings,
                      prefs: NotificationPrefs, otw: TripPlanner.OnTheWay?, canAddToRoute: Bool, silent: Bool,
-                     dropoff: DropoffInfo? = nil) {
+                     dropoff: DropoffInfo? = nil, hint: String? = nil) {
         let c = UNMutableNotificationContent()
-        let text = content(offer, score, settings, prefs, otw, dropoff: dropoff)
+        let text = content(offer, score, settings, prefs, otw, dropoff: dropoff, hint: hint)
         c.title = text.title
         c.subtitle = text.subtitle   // its own line, so line 2 is always visible
         c.body = text.body
