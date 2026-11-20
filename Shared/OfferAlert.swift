@@ -26,6 +26,8 @@ enum OfferAlert {
     static let requestId = "giggrade.offer" // same ID = a new offer replaces the old banner
     /// DoorDash: the route check waits until you tap the customer pin on the offer map.
     static let tapPinHint = "📍 Tap the customer pin for the route check"
+    /// The tapped address matched several places and the map couldn't tell which one.
+    static let multipleMatchesHint = "📍 multiple matches — zoom in and tap again"
 
     static func registerCategories() {
         let accept = UNNotificationAction(identifier: acceptAction, title: "✓ Accepted", options: [])

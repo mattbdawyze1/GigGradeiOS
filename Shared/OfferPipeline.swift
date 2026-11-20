@@ -176,7 +176,8 @@ final class OfferPipeline {
                         pickupCoord = pc // store name Apple Maps couldn't find
                     }
                 }
-                if dropoffCoord == nil, let s = await self.streetEstimate(lines: lines, pins: pins, pickup: pickupCoord, offer: offer) {
+                if dropoffCoord == nil, offer.app != .doordash, // DoorDash: the tapped address replaces this guess
+                   let s = await self.streetEstimate(lines: lines, pins: pins, pickup: pickupCoord, offer: offer) {
                     dropoffCoord = s.coord; estimated = true; streets = s.names
                 }
             }
@@ -219,7 +220,9 @@ final class OfferPipeline {
         var dropoffEstimated: Bool
         let holdVerdict: Bool        // DoorDash: no verdict banner until you tap the customer pin
         var verdictSent: Bool
-        var addresses = Set<String>()
+        var lastPopup: String?       // address bubble seen on the last scan (nil = no bubble)
+        var lastPopupTry = Date.distantPast
+        var ambiguous = false        // last tap matched several places; keep re-checking while the bubble is up
         var lastTry = Date.distantPast
         var busy = false
     }
@@ -232,32 +235,54 @@ final class OfferPipeline {
         if now > r.until { rescue = nil; lock.unlock(); return }
         let popup = r.offer.app == .doordash ? StreetLabels.popupAddress(lines) : nil
         let popupKey = popup?.text.lowercased()
-        let newPopup = popupKey.map { !r.addresses.contains($0) } ?? false
+        // A tap = the bubble appearing (or reappearing: tap the pin again to redo the check). While a tap was
+        // ambiguous, it's re-checked every 3 s as you zoom, in case more street names come into view.
+        let newPopup = popupKey != nil && (popupKey != r.lastPopup
+                                           || (r.ambiguous && now.timeIntervalSince(r.lastPopupTry) >= 3))
         let mapDue = !r.located && now.timeIntervalSince(r.lastTry) >= 2
-        guard newPopup || mapDue else { lock.unlock(); return }
+        r.lastPopup = popupKey
+        guard newPopup || mapDue else { rescue = r; lock.unlock(); return }
         r.busy = true
         if mapDue { r.lastTry = now }
-        if newPopup, let popupKey { r.addresses.insert(popupKey) }
+        if newPopup { r.lastPopupTry = now }
         rescue = r
         lock.unlock()
 
         let pins = mapPins?(r.offer.app) // must run now, while this frame is still here
         Task {
             var place: (coord: Coord, estimated: Bool, label: String?, streets: String?)?
+            var ambiguous = false
             if newPopup, let popup {
-                place = await addressEstimate(popup, pins: pins, r)
+                switch await addressEstimate(popup, pins: pins, lines: lines, r) {
+                case .placed(let coord, let estimated, let label): place = (coord, estimated, label, nil)
+                case .ambiguous: ambiguous = true
+                case .notFound: break
+                }
+            }
+            if ambiguous {
+                // Several places match and nothing on screen tells them apart: ask for a zoom + tap (once).
+                if !r.ambiguous, currentKey == key {
+                    OfferAlert.post(record: r.saved, offer: r.offer, score: r.score, settings: r.settings, prefs: r.prefs,
+                                    otw: nil, canAddToRoute: false, silent: false, hint: OfferAlert.multipleMatchesHint)
+                }
+                lock.lock()
+                if rescue?.key == key { rescue?.busy = false; rescue?.ambiguous = true; rescue?.verdictSent = true }
+                lock.unlock()
+                return
             }
             if place == nil, mapDue, let pins, !pins.customers.isEmpty {
                 if let me = store.currentLocation, let pc = r.pickup,
                    let est = MapLocator.locate(pins: pins, me: me, store: pc, statedMiles: r.offer.miles) {
                     place = (est.finalDropoff, true, nil, nil)
-                } else if let s = await streetEstimate(lines: lines, pins: pins, pickup: r.pickup, offer: r.offer) {
+                } else if r.offer.app != .doordash, // DoorDash: the tapped address replaces this guess
+                          let s = await streetEstimate(lines: lines, pins: pins, pickup: r.pickup, offer: r.offer) {
                     place = (s.coord, true, nil, s.names)
                 }
             }
             let tapped = newPopup
             let announce = !r.holdVerdict || tapped || r.verdictSent
-            let force = tapped && !r.verdictSent // first tap: always send the verdict, changed or not
+            // First tap (or the tap that settles an ambiguous one): always send the verdict, changed or not.
+            let force = tapped && (!r.verdictSent || r.ambiguous)
             var done: (found: Bool, note: String?)?
             if let place {
                 done = await finish(key: key, offer: r.offer, saved: r.saved, score: r.score, settings: r.settings,
@@ -273,6 +298,7 @@ final class OfferPipeline {
             lock.lock()
             if rescue?.key == key {
                 rescue?.busy = false
+                if tapped { rescue?.ambiguous = false }
                 if let done {
                     if done.note != nil { rescue?.note = done.note }
                     if force { rescue?.verdictSent = true }
@@ -287,46 +313,69 @@ final class OfferPipeline {
         }
     }
 
+    private enum AddressResult {
+        case placed(coord: Coord, estimated: Bool, label: String?)
+        case ambiguous   // several matches fit and nothing on screen could tell them apart
+        case notFound
+    }
+
     /// DoorDash's address bubble ("54 Elderwood Lane", shown after tapping a customer pin).
     /// - Tapped the last customer (or the only one): that address is the final stop, exactly.
     /// - Tapped another customer: its exact address plus the store pin place the last customer on the map.
-    private func addressEstimate(_ popup: OCRLine, pins: MapPins?, _ r: Rescue)
-        async -> (coord: Coord, estimated: Bool, label: String?, streets: String?)? {
+    /// When several places match the address within the offer's miles, the street names printed around the
+    /// pin (zoom in to show them) pick the right one.
+    private func addressEstimate(_ popup: OCRLine, pins: MapPins?, lines: [OCRLine], _ r: Rescue) async -> AddressResult {
         let anchor = r.pickup ?? store.currentLocation
-        let candidates = await PlaceFinder.candidates(popup.text, near: anchor)
-        guard !candidates.isEmpty else { return nil }
+        let all = await PlaceFinder.candidates(popup.text, near: anchor)
+        let fits = StreetLabels.distinctPlaces(all.filter {
+            StreetLabels.plausible(dropoff: $0, pickup: r.pickup, me: store.currentLocation, statedMiles: r.offer.miles)
+        })
+        guard !fits.isEmpty else { return .notFound }
 
         let tapped = pins.flatMap { StreetLabels.pin(under: popup, in: $0) }
         let last = pins.flatMap { StreetLabels.finalCustomer($0) }
         let isLast = tapped == nil || last == nil || tapped == last || (pins?.customers.count ?? 0) <= 1
 
-        // Pick the right "54 Elderwood Lane": next to the map's estimate when there is one, else nearest the store.
         var address: Coord?
-        if isLast, let est = r.dropoff, r.dropoffEstimated {
-            address = candidates.filter { Geo.straightMiles($0, est) <= 1.5 }
-                .min { Geo.straightMiles($0, est) < Geo.straightMiles($1, est) }
-        }
-        if address == nil {
-            let fits = candidates.filter {
-                StreetLabels.plausible(dropoff: $0, pickup: r.pickup, me: store.currentLocation, statedMiles: r.offer.miles)
+        if fits.count == 1 {
+            address = fits[0]
+        } else {
+            // 1) Nearby streets on the zoomed map: the match that actually has them around it wins.
+            let around = tapped ?? popup.x.flatMap { x in popup.y.map { MapPins.Point(x: x, y: $0) } }
+            let names = around.map { StreetLabels.neighbors(lines: lines, near: $0, excluding: popup.text) } ?? []
+            if !names.isEmpty {
+                var counts: [Int] = []
+                for place in fits.prefix(4) {
+                    var n = 0
+                    for name in names {
+                        if await PlaceFinder.streetNear(name, around: place) { n += 1 }
+                    }
+                    counts.append(n)
+                }
+                if let i = StreetLabels.bestByNeighbors(counts) { address = fits[i] }
             }
-            address = anchor.map { a in fits.min { Geo.straightMiles($0, a) < Geo.straightMiles($1, a) } } ?? fits.first
+            // 2) Otherwise the map's first estimate, if exactly one match is close to it.
+            if address == nil, isLast, let est = r.dropoff, r.dropoffEstimated {
+                let close = fits.filter { Geo.straightMiles($0, est) <= 1.5 }
+                if close.count == 1 { address = close[0] }
+            }
+            guard address != nil else { return .ambiguous }
         }
-        guard let address else { return nil }
-        if isLast { return (address, false, popup.text, nil) }
+        guard let address else { return .notFound }
+        if isLast { return .placed(coord: address, estimated: false, label: popup.text) }
 
-        guard let pins, let tapped, let last else { return nil }
+        guard let pins, let tapped, let last else { return .notFound }
         if let storeP = pins.stores.first, let pc = r.pickup,
            let solved = MapLocator.solve(refA: tapped, worldA: address, refB: storeP, worldB: pc, targets: [last]),
            let c = solved.coords.first {
-            return (c, true, nil, nil)
+            return .placed(coord: c, estimated: true, label: nil)
         }
         if let meP = pins.me, let me = store.currentLocation,
            let solved = MapLocator.solve(refA: tapped, worldA: address, refB: meP, worldB: me, targets: [last]),
            let c = solved.coords.first {
-            return (c, true, nil, nil)
+            return .placed(coord: c, estimated: true, label: nil)
         }
-        return nil
+        return .notFound
     }
 
     /// Places the customer pin at the two nearest street names printed on the map (e.g. after zooming in).

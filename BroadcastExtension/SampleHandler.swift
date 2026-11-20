@@ -123,7 +123,7 @@ class SampleHandler: RPBroadcastSampleHandler {
         // GigGrade's banner: lines near the top with its kind of content ($, /hr, /mi, miles, minutes,
         // verdict words or color dots). Offer cards are never up there.
         let ownWording = ["/hr", "/mi", "% of $", "after costs", "on the way", "off route", "close by", "ends near",
-                          "per extra mile", "couldn't locate", "route check", "route already has", "accepted + add",
+                          "per extra mile", "couldn't locate", "route check", "route already has", "accepted + add", "multiple matches", "tap the customer pin",
                           "🟢", "🟡", "🔴", "good ·", "fair ·", "bad ·", "giggrade"]
         let bannerish = ScreenPatterns.banner
         // Only treat "$ / mi / min" lines up top as our banner when the real offer card is further down.

@@ -88,6 +88,28 @@ public enum StreetLabels {
             .min { abs($0.x - px) + ($0.y - py) < abs($1.x - px) + ($1.y - py) }
     }
 
+    // MARK: Several matches for the same address
+
+    /// Matches closer than this are the same place (Apple Maps and the geocoder often both return it).
+    public static func distinctPlaces(_ coords: [Coord], within miles: Double = 0.3) -> [Coord] {
+        var out: [Coord] = []
+        for c in coords where !out.contains(where: { Geo.straightMiles($0, c) < miles }) { out.append(c) }
+        return out
+    }
+
+    /// Street names printed near the tapped pin, minus the customer's own street (every match has that one).
+    public static func neighbors(lines: [OCRLine], near point: MapPins.Point, excluding address: String,
+                                 limit: Int = 4) -> [String] {
+        let own = core(address.split(separator: " ").dropFirst().joined(separator: " "))
+        return nearest(lines: lines, to: point, limit: limit + 1).filter { core($0) != own }.prefix(limit).map { $0 }
+    }
+
+    /// Index of the match with the most nearby streets in common; nil when no match clearly wins.
+    public static func bestByNeighbors(_ counts: [Int]) -> Int? {
+        guard let top = counts.max(), top > 0, counts.filter({ $0 == top }).count == 1 else { return nil }
+        return counts.firstIndex(of: top)
+    }
+
     /// Is a dropoff this far away believable for an offer with these miles? (Offer miles include the drive to the store.)
     public static func plausible(dropoff: Coord, pickup: Coord?, me: Coord?, statedMiles: Double?) -> Bool {
         guard let miles = statedMiles, miles > 0 else { return true }

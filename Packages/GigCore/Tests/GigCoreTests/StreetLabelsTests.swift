@@ -77,4 +77,30 @@ final class StreetLabelsTests: XCTestCase {
             XCTAssertFalse(StreetLabels.isHouseAddress(t), t)
         }
     }
+
+    // Version 5.3: two "54 Elderwood Lane"s within the offer's miles.
+    func testDistinctPlaces() {
+        let a = Coord(lat: 40.800, lng: -73.400)
+        let aAgain = Coord(lat: 40.801, lng: -73.400)   // ≈ 0.07 mi: same place
+        let b = Coord(lat: 40.850, lng: -73.300)
+        XCTAssertEqual(StreetLabels.distinctPlaces([a, aAgain, b]).count, 2)
+    }
+
+    func testNeighborsSkipOwnStreet() {
+        let pin = MapPins.Point(x: 300, y: 900)
+        let lines = [
+            OCRLine("54 Elderwood Lane", x: 300, y: 760),
+            OCRLine("Elderwood Ln", x: 320, y: 880),
+            OCRLine("Pheasant Ln", x: 380, y: 940),
+            OCRLine("Old Country Rd", x: 200, y: 1000),
+        ]
+        XCTAssertEqual(StreetLabels.neighbors(lines: lines, near: pin, excluding: "54 Elderwood Lane"),
+                       ["Pheasant Ln", "Old Country Rd"])
+    }
+
+    func testBestByNeighbors() {
+        XCTAssertEqual(StreetLabels.bestByNeighbors([0, 2, 1]), 1)
+        XCTAssertNil(StreetLabels.bestByNeighbors([1, 1]))   // tie: can't decide
+        XCTAssertNil(StreetLabels.bestByNeighbors([0, 0]))   // no nearby streets read
+    }
 }

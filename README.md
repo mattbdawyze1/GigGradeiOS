@@ -27,6 +27,13 @@ The app reads gig offers live from your screen through iOS screen broadcasting (
 
 > The Offers log, screenshots and timer are shared between the screen reader and the app through the App Group. With a free Apple ID (Sideloadly) iOS may strip the App Group; if the Offers tab stays empty while banners still appear, that's why. TestFlight fixes it.
 
+## Version 5.3: zoom in to pick the right address
+
+- When the tapped address matches more than one place within the offer's miles, the street names printed around the customer pin on your zoomed map decide: the match that actually has those streets within about half a mile wins. If they can't decide, the map's first estimate breaks the tie when exactly one match is near it.
+- Still undecided: the banner says "📍 multiple matches — zoom in and tap again". While the bubble stays up, it re-checks every 3 seconds as you zoom; tapping the pin again also redoes the check. When it's settled you get the verdict banner.
+- Tap again any time: the bubble reappearing redoes the check (a new banner only if the verdict changes).
+- DoorDash no longer guesses the customer from two street names (that guess searched in the store's town and could land in the wrong town). Uber still uses it when needed.
+
 ## Version 5.2: DoorDash route check waits for your tap
 
 - DoorDash offers: the first banner goes out right away with the grade and rates, and line 3 says "📍 Tap the customer pin for the route check". The map is still read in the background, silently.

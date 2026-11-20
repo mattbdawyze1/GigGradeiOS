@@ -95,6 +95,21 @@ enum PlaceFinder {
         return found.filter { Geo.straightMiles(near, $0) < 40 }
     }
 
+    /// Is there a street with this name within about half a mile of `spot`? (Checks a zoomed map's street names
+    /// against one of several "54 Elderwood Lane" matches.)
+    static func streetNear(_ name: String, around spot: Coord, miles: Double = 0.6) async -> Bool {
+        let want = StreetLabels.core(name)
+        let req = MKLocalSearch.Request()
+        req.naturalLanguageQuery = name
+        req.resultTypes = .address
+        req.region = MKCoordinateRegion(center: spot.cl, latitudinalMeters: 2_500, longitudinalMeters: 2_500)
+        guard let resp = try? await MKLocalSearch(request: req).start() else { return false }
+        return resp.mapItems.contains { item in
+            let text = [item.placemark.thoroughfare, item.name].compactMap { $0?.lowercased() }.joined(separator: " ")
+            return text.contains(want) && Geo.straightMiles(spot, Coord(item.placemark.coordinate)) <= miles
+        }
+    }
+
     /// Apple Maps search (good for business names and addresses).
     private static func search(_ query: String, near: Coord?) async -> Coord? {
         let req = MKLocalSearch.Request()
