@@ -1,9 +1,10 @@
 import Foundation
 import GigCore
 
-/// Runs in the screen reader. Does nothing until you press 👓 on an accepted Uber offer in GigGrade.
+/// Runs in the screen reader. Does nothing until you press 👓 on an accepted offer in GigGrade.
 /// Then it reads Uber's Trip Guide (pieced together as you scroll and expand stops) and pickup screens,
-/// and once you leave the Trip Guide it hands the finished list to the app, which updates your route.
+/// or DoorDash's "Your route" list (tap each stop for its address) and "Pick up by / Deliver by" screens.
+/// Once you leave the list it hands the finished reading to the app, which updates your route.
 final class GuideCollector {
     static let shared = GuideCollector()
 
@@ -31,22 +32,36 @@ final class GuideCollector {
         guard let req = request, !finishing else { return }
 
         let lower = lines.map { $0.text.lowercased() }
-        let guide = lower.contains { $0.replacingOccurrences(of: " ", with: "") == "tripguide" }
-        let pickup = lower.contains { $0.hasPrefix("pick up") }
+        let uberGuide = lower.contains { $0.replacingOccurrences(of: " ", with: "") == "tripguide" }
+        let doorDashRoute = !uberGuide && DoorDashGuide.isRouteScreen(lines)
 
-        if guide {
-            let screen = TripGuide.sections(lines)
+        // The stop list: Uber's Trip Guide, or DoorDash's "Your route" (with its pop-ups).
+        if uberGuide || doorDashRoute {
+            let screen = uberGuide ? TripGuide.sections(lines) : DoorDashGuide.sections(lines)
             if !screen.isEmpty {
                 snapshot.sections = TripGuide.merge(snapshot.sections, with: screen)
                 lastGuideAt = now
                 snapshot.seenAt = now
             }
         }
-        if pickup, let ps = TripGuide.pickupScreen(lines, at: now), !ps.customers.isEmpty {
+
+        // Who's picked up where (and addresses): Uber's pickup screen, DoorDash's "Pick up by / Deliver by" screen.
+        var link: PickupScreen?
+        if lower.contains(where: { $0.hasPrefix("pick up") }), let ps = TripGuide.pickupScreen(lines, at: now) {
+            link = ps
+            if let a = ps.address { remember(ps.store, a) }
+        } else if !uberGuide, !doorDashRoute,
+                  lower.contains(where: { $0.hasPrefix("pick up by") || $0.hasPrefix("deliver by") }),
+                  let task = DoorDashGuide.taskScreen(lines, at: now) {
+            link = task.link
+            if let a = task.address { remember(task.name, a) }
+        }
+        if let ps = link, !ps.customers.isEmpty {
             var list = snapshot.pickupScreens.filter { TripGuide.norm($0.store) != TripGuide.norm(ps.store) }
             var merged = ps
             if let old = snapshot.pickupScreens.first(where: { TripGuide.norm($0.store) == TripGuide.norm(ps.store) }) {
                 merged.customers = Array(Set(old.customers + ps.customers)).sorted()
+                if merged.address == nil { merged.address = old.address }
             }
             list.append(merged)
             snapshot.pickupScreens = list
@@ -54,15 +69,27 @@ final class GuideCollector {
         snapshot.requestId = req.id
     }
 
+    /// Addresses read off pickup/delivery screens, used when a stop in the list wasn't tapped open.
+    private func remember(_ name: String, _ address: String) {
+        var map = snapshot.addresses ?? [:]
+        map[TripGuide.norm(name)] = address
+        snapshot.addresses = map
+    }
+
     // MARK: Every few seconds (from the screen reader's clock)
 
     func tick(now: Date = Date()) {
+        let lastOffer = OfferPipeline.shared.lastOfferSeen
         lock.lock()
         let req = request
+        // Only an offer that shows up after you pressed 👓 counts (not the one you just accepted).
+        let offerUp = req.map { lastOffer > $0.armedAt } ?? false
         let seenGuide = !snapshot.sections.isEmpty
         let leftGuide = now.timeIntervalSince(lastGuideAt) >= Self.leftGuideAfter
         let timedOut = req.map { now.timeIntervalSince($0.armedAt) > Self.requestTimeout } ?? false
-        let shouldFinish = req != nil && !finishing && ((seenGuide && leftGuide) || timedOut)
+        // An offer popping up ends the reading right away: whatever was read goes into the route,
+        // and pressing 👓 again later picks up the rest (stops already added are skipped).
+        let shouldFinish = req != nil && !finishing && (offerUp || (seenGuide && leftGuide) || timedOut)
         if shouldFinish { finishing = true }
         let shouldPoll = !polling && now.timeIntervalSince(lastPoll) >= Self.pollEvery
         if shouldPoll { polling = true; lastPoll = now }
@@ -89,20 +116,23 @@ final class GuideCollector {
         // New press: start a clean reading.
         request = req
         finishing = false
-        snapshot = GuideSnapshot(seenAt: .distantPast, sections: [], pickupScreens: [], requestId: req.id)
+        let keep = snapshot.pickupScreens.filter { Date().timeIntervalSince($0.seenAt) < 3 * 3600 }
+        let addresses = snapshot.addresses
+        snapshot = GuideSnapshot(seenAt: .distantPast, sections: [], pickupScreens: keep, requestId: req.id)
+        snapshot.addresses = addresses
         lastGuideAt = .distantPast
     }
 
     /// Hands the finished reading to the app.
     private func finish() {
         lock.lock()
-        var snap = snapshot
-        snap.complete = true
-        if let id = request?.id { handled.insert(id); snap.requestId = id }
+        var finished = snapshot
+        finished.complete = true
+        if let id = request?.id { handled.insert(id); finished.requestId = id }
         request = nil
         lock.unlock()
 
-        guard let data = try? GuideStore.encoder.encode(snap) else { finishDone(); return }
+        guard let data = try? GuideStore.encoder.encode(finished) else { finishDone(); return }
         GuideStore.saveLocal(data)
         Task {
             await Cloud.shared.uploadGuide(data)

@@ -47,7 +47,7 @@ public struct TripPlanner {
             switch s.type {
             case .pickup: picked.insert(s.orderId)
             case .dropoff:
-                if ordersWithPickup.contains(s.orderId) && !picked.contains(s.orderId) { return false }
+                for id in s.orderIds where ordersWithPickup.contains(id) && !picked.contains(id) { return false }
             }
         }
         return true

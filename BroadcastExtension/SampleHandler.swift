@@ -163,7 +163,8 @@ class SampleHandler: RPBroadcastSampleHandler {
         // Line centers in pixels (same space as the map pins), so map street names can be matched to a pin.
         let w = Double(CVPixelBufferGetWidth(pixelBuffer)), h = Double(CVPixelBufferGetHeight(pixelBuffer))
         let out = kept.enumerated().map { i, l in
-            OCRLine(l.text, emphasis: emphasis[i], x: Double(l.box.midX) * w, y: (1 - Double(l.box.midY)) * h)
+            OCRLine(l.text, emphasis: emphasis[i], x: Double(l.box.midX) * w, y: (1 - Double(l.box.midY)) * h,
+                    h: Double(l.box.height) * h)
         }
         return Screen(lines: out, bannerBottom: bannerBottom, cardTop: cardTop)
     }

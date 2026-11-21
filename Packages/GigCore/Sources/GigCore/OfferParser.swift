@@ -35,8 +35,10 @@ public struct OCRLine: Equatable {
     /// Center of the line on screen, in the same pixel space as `MapPins` (nil when unknown).
     public var x: Double?
     public var y: Double?
-    public init(_ text: String, emphasis: Double? = nil, x: Double? = nil, y: Double? = nil) {
-        self.text = text; self.emphasis = emphasis; self.x = x; self.y = y
+    /// Height of the line in pixels (nil when unknown); used to tell a wrapped name from a separate label.
+    public var h: Double?
+    public init(_ text: String, emphasis: Double? = nil, x: Double? = nil, y: Double? = nil, h: Double? = nil) {
+        self.text = text; self.emphasis = emphasis; self.x = x; self.y = y; self.h = h
     }
 }
 

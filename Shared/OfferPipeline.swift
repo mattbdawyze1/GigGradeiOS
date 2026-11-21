@@ -28,6 +28,9 @@ final class OfferPipeline {
 
     private var currentKey: String? { lock.lock(); defer { lock.unlock() }; return lastKey }
 
+    /// Last time an offer (readable or not) was on screen. 👓 ends its reading when an offer shows up after the press.
+    var lastOfferSeen: Date { lock.lock(); defer { lock.unlock() }; return max(lastSeen, lastOfferishAt) }
+
     func reset() {
         lock.lock()
         lastKey = nil; activePay = nil; candidateKey = nil; candidateCount = 0

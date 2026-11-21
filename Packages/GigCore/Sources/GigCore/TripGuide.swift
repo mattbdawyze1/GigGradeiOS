@@ -37,6 +37,10 @@ public struct GuideSnapshot: Codable, Equatable {
     public var pickupScreens: [PickupScreen]
     public var requestId: String?    // the 👓 press this reading answers
     public var complete: Bool?       // true once you left the Trip Guide (or the request timed out)
+    public var added: [Stop]?        // stops the screen reader already looked up, ready to drop into the route
+    public var title: String?        // what the notification said
+    public var message: String?
+    public var addresses: [String: String]?   // name (normalized) -> address, from pickup/delivery screens
 
     public init(seenAt: Date, sections: [GuideSection], pickupScreens: [PickupScreen],
                 requestId: String? = nil, complete: Bool? = nil) {
@@ -178,10 +182,14 @@ public enum TripGuide {
             }
             cursor = (all.firstIndex { $0.key == screen[firstKnown].key }!) - 1
         }
+        var timesOnScreen: [String: Int] = [:]
         for s in screen {
+            timesOnScreen[s.key, default: 0] += 1
             if let at = all.firstIndex(where: { $0.key == s.key }) {
                 if all[at].address == nil, let a = s.address { all[at].address = a }
-                if s.orders > all[at].orders { all[at].orders = s.orders }
+                // The same store listed twice (DoorDash: two orders from one store) = 2 orders there.
+                let orders = max(s.orders, timesOnScreen[s.key] ?? 1)
+                if orders > all[at].orders { all[at].orders = orders }
                 cursor = at
             } else if let c = cursor {
                 all.insert(s, at: c + 1)

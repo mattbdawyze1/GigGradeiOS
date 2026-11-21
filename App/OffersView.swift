@@ -103,7 +103,7 @@ struct OfferRow: View {
             Spacer(minLength: 4)
             decisionButton(.accepted, icon: "checkmark", tint: OfferCategory.good.color)
             decisionButton(.declined, icon: "xmark", tint: OfferCategory.bad.color)
-            if record.app == .uber { readGuideButton }
+            if record.app == .uber || record.app == .doordash { readGuideButton }
         }
         .padding(.vertical, 2)
         .listRowBackground(record.category.color.opacity(0.08))
@@ -114,7 +114,8 @@ struct OfferRow: View {
         }
     }
 
-    /// 👓 After you mark the offer accepted: turns on, the screen reader reads Uber's Trip Guide, then GigGrade
+    /// 👓 After you mark the offer accepted: turns on, the screen reader reads Uber's Trip Guide or DoorDash's
+    /// Your route, then GigGrade
     /// adds every stop to your route (linked), notifies you and turns the button off. Tap again to cancel.
     private var readGuideButton: some View {
         let accepted = record.decision == .accepted
@@ -141,7 +142,7 @@ struct OfferRow: View {
         }
         .buttonStyle(.borderless)
         .disabled(working || (!accepted && !on))
-        .accessibilityLabel(on ? "Reading Uber's Trip Guide. Tap to cancel" : "Read Uber's Trip Guide into the route")
+        .accessibilityLabel(on ? "Reading the stop list. Tap to cancel" : "Read the app's stop list into the route")
     }
 
     private var line: String {

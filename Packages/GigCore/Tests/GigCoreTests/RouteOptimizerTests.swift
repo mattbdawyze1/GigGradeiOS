@@ -91,4 +91,32 @@ final class RouteOptimizerTests: XCTestCase {
         XCTAssertNotNil(r)
         XCTAssertTrue(TripPlanner.isValidOrder(r!.order.map { stops[$0] }))
     }
+
+    // Version 5.5: one dropoff linked to two pickups (two orders going to one address).
+    func testDropoffLinkedToTwoPickups() {
+        let wingstop = stop(.pickup, "W", 10, 0)
+        let tacoBell = stop(.pickup, "T", 0, 10)
+        var house = stop(.dropoff, "T", 1, 1)        // right next to you, but needs both pickups first
+        house.setOrders(["T", "W"])
+        XCTAssertEqual(house.orderIds, ["T", "W"])
+
+        XCTAssertFalse(TripPlanner.isValidOrder([tacoBell, house, wingstop]))
+        XCTAssertTrue(TripPlanner.isValidOrder([tacoBell, wingstop, house]))
+
+        let stops = [house, wingstop, tacoBell]
+        let me = stop(.pickup, "me", 0, 0)
+        let cost = stops.map { a in stops.map { b in dist(a, b) } }
+        let r = RouteOptimizer.optimize(stops: stops, cost: cost, fromStart: stops.map { dist(me, $0) })!
+        XCTAssertEqual(r.order.last, 0) // the shared dropoff goes last, after both pickups
+        XCTAssertTrue(TripPlanner.isValidOrder(r.order.map { stops[$0] }))
+    }
+
+    func testSetOrdersDropsDuplicates() {
+        var s = stop(.dropoff, "A", 0, 0)
+        s.setOrders(["A", "B", "A"])
+        XCTAssertEqual(s.orderIds, ["A", "B"])
+        s.setOrders([])
+        XCTAssertEqual(s.orderIds.count, 1)
+        XCTAssertNil(s.extraOrderIds)
+    }
 }

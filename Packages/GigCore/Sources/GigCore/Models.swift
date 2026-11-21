@@ -242,9 +242,24 @@ public struct Stop: Codable, Equatable, Identifiable, Hashable {
     public var label: String
     public var location: Coord
     public var orderId: String
+    /// A dropoff can belong to more than one pickup (two orders going to one address).
+    public var extraOrderIds: [String]?
 
-    public init(id: UUID = UUID(), type: StopType, label: String, location: Coord, orderId: String) {
+    public init(id: UUID = UUID(), type: StopType, label: String, location: Coord, orderId: String,
+                extraOrderIds: [String]? = nil) {
         self.id = id; self.type = type; self.label = label; self.location = location; self.orderId = orderId
+        self.extraOrderIds = extraOrderIds
+    }
+
+    /// Every order this stop is part of.
+    public var orderIds: [String] { [orderId] + (extraOrderIds ?? []) }
+
+    /// Sets the orders this stop is part of (first one is the main one).
+    public mutating func setOrders(_ ids: [String]) {
+        var unique: [String] = []
+        for id in ids where !unique.contains(id) { unique.append(id) }
+        orderId = unique.first ?? UUID().uuidString
+        extraOrderIds = unique.count > 1 ? Array(unique.dropFirst()) : nil
     }
 }
 

@@ -85,31 +85,58 @@ final class RouteModel: ObservableObject {
 
     // MARK: Linking (a linked dropoff always stays after its pickup)
 
-    /// Letter shown on linked stops: stops sharing an order with both a pickup and a dropoff get A, B, C…
+    /// Letter for each pickup that has at least one dropoff linked to it: A, B, C…
     var linkLetters: [String: String] {
         var letters: [String: String] = [:]
         let alphabet = Array("ABCDEFGHIJ")
-        for s in stops where letters[s.orderId] == nil {
-            let group = stops.filter { $0.orderId == s.orderId }
-            guard group.contains(where: { $0.type == .pickup }), group.contains(where: { $0.type == .dropoff }) else { continue }
-            letters[s.orderId] = String(alphabet[min(letters.count, alphabet.count - 1)])
+        for p in stops where p.type == .pickup && letters[p.orderId] == nil {
+            guard stops.contains(where: { $0.type == .dropoff && $0.orderIds.contains(p.orderId) }) else { continue }
+            letters[p.orderId] = String(alphabet[min(letters.count, alphabet.count - 1)])
         }
         return letters
     }
 
-    /// Link a dropoff to a pickup (nil = unlink). If the dropoff was above its pickup, it moves just below it.
-    func link(_ dropoff: Stop, to pickup: Stop?) {
+    /// The letters to show on a stop: a pickup's own, or every pickup a dropoff is linked to ("A", "A B").
+    func letters(for s: Stop) -> [String] {
+        let all = linkLetters
+        return s.orderIds.compactMap { all[$0] }
+    }
+
+    /// The pickups a dropoff is linked to right now.
+    private func linkedPickupIds(_ d: Stop, in list: [Stop]) -> [String] {
+        d.orderIds.filter { id in list.contains { $0.type == .pickup && $0.orderId == id } }
+    }
+
+    /// Tick / untick a pickup for a dropoff. A dropoff can be linked to several pickups (two orders going to
+    /// one address); it always stays after every one of them, and moves down below them if needed.
+    func toggleLink(_ dropoff: Stop, _ pickup: Stop) {
         var newStops = store.stops
         guard let di = newStops.firstIndex(where: { $0.id == dropoff.id }) else { return }
-        newStops[di].orderId = pickup?.orderId ?? UUID().uuidString
-        if !TripPlanner.isValidOrder(newStops), let pickup {
-            let moved = newStops.remove(at: di)
-            if let pi = newStops.firstIndex(where: { $0.id == pickup.id }) {
-                newStops.insert(moved, at: pi + 1)
-            } else {
-                newStops.append(moved)
-            }
-        }
+        var ids = linkedPickupIds(newStops[di], in: newStops)
+        if ids.contains(pickup.orderId) { ids.removeAll { $0 == pickup.orderId } } else { ids.append(pickup.orderId) }
+        newStops[di].setOrders(ids)
+        save(placeAfterPickups(newStops, dropoffId: dropoff.id))
+    }
+
+    /// Remove every link from a dropoff.
+    func unlinkAll(_ dropoff: Stop) {
+        var newStops = store.stops
+        guard let di = newStops.firstIndex(where: { $0.id == dropoff.id }) else { return }
+        newStops[di].setOrders([])
+        save(newStops)
+    }
+
+    /// If a dropoff sits above one of its pickups, move it just below the last one.
+    private func placeAfterPickups(_ list: [Stop], dropoffId: UUID) -> [Stop] {
+        var out = list
+        guard !TripPlanner.isValidOrder(out), let di = out.firstIndex(where: { $0.id == dropoffId }) else { return out }
+        let moved = out.remove(at: di)
+        let last = out.lastIndex { $0.type == .pickup && moved.orderIds.contains($0.orderId) }
+        out.insert(moved, at: last.map { $0 + 1 } ?? out.count)
+        return out
+    }
+
+    private func save(_ newStops: [Stop]) {
         guard TripPlanner.isValidOrder(newStops) else { return }
         store.stops = newStops
         undoOrder = nil
@@ -292,9 +319,8 @@ struct RouteView: View {
                             Image(systemName: "location.circle.fill").font(.title).foregroundStyle(.blue)
                         }
                     }
-                    let letters = model.linkLetters
                     ForEach(Array(model.stops.enumerated()), id: \.element.id) { i, s in
-                        Marker(markerTitle(i, s, letters), coordinate: s.location.cl)
+                        Marker(markerTitle(i, s), coordinate: s.location.cl)
                             .tint(s.type == .pickup ? .blue : .green)
                     }
                     ForEach(model.legs, id: \.self) { leg in
@@ -329,14 +355,13 @@ struct RouteView: View {
                         }
                     }
                     Section {
-                        let letters = model.linkLetters
                         let pickups = model.stops.enumerated().filter { $0.element.type == .pickup }
                         ForEach(Array(model.stops.enumerated()), id: \.element.id) { i, s in
                             HStack {
                                 Image(systemName: s.type == .pickup ? "bag.fill" : "house.fill")
                                     .foregroundStyle(s.type == .pickup ? .blue : .green)
                                 Text("\(i + 1). \(s.label)").lineLimit(1)
-                                if let letter = letters[s.orderId] {
+                                ForEach(model.letters(for: s), id: \.self) { letter in
                                     Text(letter)
                                         .font(.caption2.weight(.bold))
                                         .foregroundStyle(.white)
@@ -346,25 +371,28 @@ struct RouteView: View {
                                 Spacer()
                                 if editMode == .inactive {
                                     if s.type == .dropoff && !pickups.isEmpty {
+                                        let linked = !model.letters(for: s).isEmpty
                                         Menu {
-                                            ForEach(pickups, id: \.element.id) { pi, p in
-                                                Button {
-                                                    model.link(s, to: p)
-                                                } label: {
-                                                    if p.orderId == s.orderId {
-                                                        Label("\(pi + 1). \(p.label)", systemImage: "checkmark")
-                                                    } else {
-                                                        Text("\(pi + 1). \(p.label)")
+                                            Section("Linked to (tick one or more)") {
+                                                ForEach(pickups, id: \.element.id) { pi, p in
+                                                    Button {
+                                                        model.toggleLink(s, p)
+                                                    } label: {
+                                                        if s.orderIds.contains(p.orderId) {
+                                                            Label("\(pi + 1). \(p.label)", systemImage: "checkmark")
+                                                        } else {
+                                                            Text("\(pi + 1). \(p.label)")
+                                                        }
                                                     }
                                                 }
                                             }
-                                            if letters[s.orderId] != nil {
-                                                Button(role: .destructive) { model.link(s, to: nil) } label: {
-                                                    Label("Unlink", systemImage: "link.badge.minus")
+                                            if linked {
+                                                Button(role: .destructive) { model.unlinkAll(s) } label: {
+                                                    Label("Unlink all", systemImage: "link.badge.minus")
                                                 }
                                             }
                                         } label: {
-                                            Image(systemName: letters[s.orderId] == nil ? "link" : "link.circle.fill")
+                                            Image(systemName: linked ? "link.circle.fill" : "link")
                                                 .font(.title3)
                                         }
                                         .menuStyle(.button)
@@ -392,7 +420,7 @@ struct RouteView: View {
                         if editMode == .active {
                             Text("Drag ≡ to change the order. Swipe left to remove a stop. A dropoff can't go before its own pickup.")
                         } else if model.stops.contains(where: { $0.type == .dropoff }) {
-                            Text("Tap 🔗 on a dropoff to link it to its pickup. Linked stops share a letter, and the dropoff always stays after its pickup, including when you optimize. Offers you accept are linked automatically.")
+                            Text("Tap 🔗 on a dropoff to link it to its pickup. Tick two pickups when two orders go to one address. Linked stops share a letter, and a dropoff always stays after every pickup it's linked to, including when you optimize. Offers you accept are linked automatically.")
                         }
                     }
                     Section {
@@ -495,10 +523,10 @@ struct RouteView: View {
         }
     }
 
-    private func markerTitle(_ i: Int, _ s: Stop, _ letters: [String: String]) -> String {
+    private func markerTitle(_ i: Int, _ s: Stop) -> String {
         let kind = s.type == .pickup ? "Pickup" : "Dropoff"
-        if let letter = letters[s.orderId] { return "\(i + 1). \(kind) \(letter)" }
-        return "\(i + 1). \(kind)"
+        let letters = model.letters(for: s)
+        return letters.isEmpty ? "\(i + 1). \(kind)" : "\(i + 1). \(kind) \(letters.joined(separator: " "))"
     }
 
     private func reset() {

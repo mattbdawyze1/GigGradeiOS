@@ -27,11 +27,21 @@ The app reads gig offers live from your screen through iOS screen broadcasting (
 
 > The Offers log, screenshots and timer are shared between the screen reader and the app through the App Group. With a free Apple ID (Sideloadly) iOS may strip the App Group; if the Offers tab stays empty while banners still appear, that's why. TestFlight fixes it.
 
+## Version 5.5: 👓 for DoorDash
+
+- 👓 now also appears on DoorDash offers (after you mark them ✓). While it's on, GigGrade reads:
+  - **"Your route"** (gear icon): every stop in order. Tap each stop to open its pop-up so the full address is read (hold ~2 s), then go back.
+  - **The task screen** ("Pick up by …" dragged up shows who you're picking up for; "Deliver by …" shows the customer's address and which store their order is from). These link dropoffs to stores and fill in addresses.
+- Leaving "Your route" for 5 seconds finishes the reading, same as Uber's Trip Guide. An offer popping up ends it early.
+- No address is added twice, and nothing already in your route is added again (same house number + street, same spot, or same name), the same as Uber. A store listed twice becomes one pickup with 2 orders; two orders going to one address become one dropoff, linked to both pickups.
+- A dropoff can be linked to more than one pickup: in the Route tab, tap 🔗 on it and tick each pickup (it shows both letters, e.g. "A B"). It always stays after every pickup it's linked to, including when you drag or optimize. 👓 does this on its own when a second order goes to an address already in your route.
+
 ## Version 5.4: 👓 add Uber stops to your route
 
 - The orange 👓 button sits next to ✕ on Uber offers in the Offers tab. It works once you've marked the offer accepted (✓); before that it's grayed out.
 - Tap 👓 and it turns on (solid orange, pulsing). Only then does the screen reader read Uber's **Trip Guide** (pieced together as you scroll; tap each stop to expand it so its address shows) and Uber's **pickup screen** ("Pick up 1 order" + who it's for). Nothing is read before you press it.
-- When you leave the Trip Guide (5 seconds off screen), GigGrade adds every stop to the Route tab top to bottom, skipping stops already in your route, links pickups to dropoffs, sends a "🗺️ Route updated" notification and turns 👓 off. Tap 👓 while it's on to cancel. It gives up after 15 minutes.
+- When you leave the Trip Guide (5 seconds off screen), GigGrade adds every stop to the Route tab top to bottom, skipping stops already in your route, links pickups to dropoffs, sends a "🗺️ Route updated" notification and turns 👓 off (usually about 7–8 seconds after you leave: GigGrade checks every second while 👓 is on, and looks up all the addresses at once). Tap 👓 while it's on to cancel. It gives up after 15 minutes.
+- Offers come first: if an offer pops up while 👓 is reading, the reading ends right away and whatever was read goes into the route. After you accept (press 👓 on the new offer) or decline (press 👓 again), the next reading picks up where it left off: stops already in the route are skipped, and pickup screens seen in the last 3 hours still count for linking. The "Route updated" notification waits until any offer banner is at least 15 seconds old, and ranks below offer banners.
 - Linking: the pickup screen decides when it was seen; otherwise each dropoff goes with the earliest pickup above it that still has an order (first in, first out). A dropoff with no pickup above it is linked to its store if that store is already in your route, otherwise left unlinked.
 - Handles OCR mix-ups ("·l order", "l40l Brook Ave" → 1401). No Supabase setup needed: the request and the result go through your existing private storage bucket.
 

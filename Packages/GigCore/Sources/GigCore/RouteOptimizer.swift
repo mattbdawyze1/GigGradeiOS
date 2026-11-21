@@ -20,7 +20,8 @@ public enum RouteOptimizer {
         stops.map { s in
             guard s.type == .dropoff else { return 0 }
             var need = 0
-            for (i, o) in stops.enumerated() where o.type == .pickup && o.orderId == s.orderId { need |= 1 << i }
+            let orders = Set(s.orderIds)
+            for (i, o) in stops.enumerated() where o.type == .pickup && orders.contains(o.orderId) { need |= 1 << i }
             return need
         }
     }
