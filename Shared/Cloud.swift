@@ -98,7 +98,8 @@ actor Cloud {
 
     @discardableResult
     private func send(_ method: String, _ path: String, query: [URLQueryItem] = [], body: Data? = nil,
-                      contentType: String = "application/json", headers: [String: String] = [:]) async throws -> Data {
+                      contentType: String = "application/json", headers: [String: String] = [:],
+                      quiet: Bool = false) async throws -> Data {
         guard Self.isConfigured else { throw CloudError(message: "Cloud sync not set up") }
         guard var comps = URLComponents(string: base + path) else { throw CloudError(message: "Bad URL") }
         if !query.isEmpty { comps.queryItems = query }
@@ -130,10 +131,10 @@ actor Cloud {
             case 401, 403: msg = "Key rejected (\(code)) — \(detail) — \(place)"
             default: msg = "Error \(code) — \(detail) — \(place)"
             }
-            setStatus(ok: false, msg)
+            if !quiet { setStatus(ok: false, msg) } // quiet: an expected "not there yet" isn't a connection problem
             throw CloudError(message: msg)
         }
-        setStatus(ok: true, "Connected to Supabase")
+        if !quiet { setStatus(ok: true, "Connected to Supabase") }
         return data
     }
 
@@ -447,6 +448,34 @@ actor Cloud {
     func missedScreenshot(_ path: String) async -> Data? {
         try? await send("GET", "/storage/v1/object/authenticated/screenshots/\(path)")
     }
+
+    // MARK: Uber Trip Guide (screen reader → cloud → app, for the 👓 button)
+
+    private static let guidePath = "/storage/v1/object/screenshots/state/trip_guide.json"
+
+    func uploadGuide(_ json: Data) async {
+        guard Self.isConfigured else { return }
+        _ = try? await send("POST", Self.guidePath, body: json, contentType: "application/json",
+                            headers: ["x-upsert": "true"])
+    }
+
+    func downloadGuide() async -> Data? {
+        guard Self.isConfigured else { return nil }
+        return try? await send("GET", "/storage/v1/object/authenticated/screenshots/state/trip_guide.json", quiet: true)
+    }
+
+    /// The 👓 press (app → screen reader).
+    func uploadGuideRequest(_ json: Data) async -> Bool {
+        guard Self.isConfigured else { return false }
+        return (try? await send("POST", "/storage/v1/object/screenshots/state/guide_request.json", body: json,
+                                contentType: "application/json", headers: ["x-upsert": "true"])) != nil
+    }
+
+    func downloadGuideRequest() async -> Data? {
+        guard Self.isConfigured else { return nil }
+        return try? await send("GET", "/storage/v1/object/authenticated/screenshots/state/guide_request.json", quiet: true)
+    }
+
 
     // MARK: Recording timer (screen reader → cloud → app)
 

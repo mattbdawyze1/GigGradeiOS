@@ -22,6 +22,7 @@ class SampleHandler: RPBroadcastSampleHandler {
     private var lastHeartbeat = Date.distantPast
     private var lastCloudBeat = Date.distantPast
     private let scanInterval: TimeInterval = 1.0
+    private var lastGuideTick = Date.distantPast
     private let ciContext = CIContext(options: [.cacheIntermediates: false])
     private let store = SharedStore.shared
 
@@ -44,6 +45,10 @@ class SampleHandler: RPBroadcastSampleHandler {
         if now.timeIntervalSince(lastHeartbeat) >= 5 {
             lastHeartbeat = now
             store.broadcastHeartbeat = now // lets the app's timer know we're still recording
+        }
+        if now.timeIntervalSince(lastGuideTick) >= 1 {
+            lastGuideTick = now
+            GuideCollector.shared.tick(now: now) // 👓: watch for a press, finish when you leave the Trip Guide
         }
         if now.timeIntervalSince(lastCloudBeat) >= 15 {
             lastCloudBeat = now
@@ -75,6 +80,7 @@ class SampleHandler: RPBroadcastSampleHandler {
                 guard let screen = Self.readScreen(request.results ?? [], pixelBuffer: pixelBuffer) else { return } // GigGrade's own screen
                 let ctx = ciContext
                 let upright = orientation == .up
+                GuideCollector.shared.observe(screen.lines) // Uber Trip Guide / pickup screen, only after a 👓 press
                 OfferPipeline.shared.handle(lines: screen.lines, screenshot: {
                     Self.jpeg(pixelBuffer, orientation: orientation, context: ctx)
                 }, mapPins: { app in

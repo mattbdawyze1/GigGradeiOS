@@ -233,6 +233,7 @@ struct AutoReload: ViewModifier {
                 model.reload()
                 model.refreshFromCloud()
                 Task { await Cloud.shared.pullBroadcastIntoStore() }
+                Task { await GuideSession.shared.pollIfDue() } // 👓 finished? update the route
             }
             .onReceive(NotificationCenter.default.publisher(for: .logChanged)) { _ in model.reload() }
             .onChange(of: phase) { _, p in if p == .active { model.reload(); model.refreshFromCloud(force: true) } }

@@ -82,6 +82,9 @@ struct OfferRow: View {
     let record: OfferRecord
     @ObservedObject var model: LogModel
     let onOpen: () -> Void
+    @ObservedObject private var guide = GuideSession.shared
+    @State private var working = false
+    @State private var problem: String?
 
     var body: some View {
         HStack(spacing: 10) {
@@ -100,9 +103,45 @@ struct OfferRow: View {
             Spacer(minLength: 4)
             decisionButton(.accepted, icon: "checkmark", tint: OfferCategory.good.color)
             decisionButton(.declined, icon: "xmark", tint: OfferCategory.bad.color)
+            if record.app == .uber { readGuideButton }
         }
         .padding(.vertical, 2)
         .listRowBackground(record.category.color.opacity(0.08))
+        .alert("👓", isPresented: Binding(get: { problem != nil }, set: { if !$0 { problem = nil } })) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(problem ?? "")
+        }
+    }
+
+    /// 👓 After you mark the offer accepted: turns on, the screen reader reads Uber's Trip Guide, then GigGrade
+    /// adds every stop to your route (linked), notifies you and turns the button off. Tap again to cancel.
+    private var readGuideButton: some View {
+        let accepted = record.decision == .accepted
+        let on = guide.isOn(record)
+        return Button {
+            working = true
+            Task {
+                problem = await guide.toggle(record)
+                working = false
+            }
+        } label: {
+            ZStack {
+                Circle().fill(on ? Color.orange : Color.orange.opacity(accepted ? 0.15 : 0.06))
+                if working {
+                    ProgressView().tint(on ? .white : .orange)
+                } else {
+                    Image(systemName: "eyeglasses")
+                        .font(.system(size: 15, weight: .bold))
+                        .foregroundStyle(on ? Color.white : Color.orange.opacity(accepted ? 1 : 0.35))
+                        .symbolEffect(.pulse, isActive: on)
+                }
+            }
+            .frame(width: 34, height: 34)
+        }
+        .buttonStyle(.borderless)
+        .disabled(working || (!accepted && !on))
+        .accessibilityLabel(on ? "Reading Uber's Trip Guide. Tap to cancel" : "Read Uber's Trip Guide into the route")
     }
 
     private var line: String {

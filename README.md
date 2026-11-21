@@ -27,6 +27,14 @@ The app reads gig offers live from your screen through iOS screen broadcasting (
 
 > The Offers log, screenshots and timer are shared between the screen reader and the app through the App Group. With a free Apple ID (Sideloadly) iOS may strip the App Group; if the Offers tab stays empty while banners still appear, that's why. TestFlight fixes it.
 
+## Version 5.4: 👓 add Uber stops to your route
+
+- The orange 👓 button sits next to ✕ on Uber offers in the Offers tab. It works once you've marked the offer accepted (✓); before that it's grayed out.
+- Tap 👓 and it turns on (solid orange, pulsing). Only then does the screen reader read Uber's **Trip Guide** (pieced together as you scroll; tap each stop to expand it so its address shows) and Uber's **pickup screen** ("Pick up 1 order" + who it's for). Nothing is read before you press it.
+- When you leave the Trip Guide (5 seconds off screen), GigGrade adds every stop to the Route tab top to bottom, skipping stops already in your route, links pickups to dropoffs, sends a "🗺️ Route updated" notification and turns 👓 off. Tap 👓 while it's on to cancel. It gives up after 15 minutes.
+- Linking: the pickup screen decides when it was seen; otherwise each dropoff goes with the earliest pickup above it that still has an order (first in, first out). A dropoff with no pickup above it is linked to its store if that store is already in your route, otherwise left unlinked.
+- Handles OCR mix-ups ("·l order", "l40l Brook Ave" → 1401). No Supabase setup needed: the request and the result go through your existing private storage bucket.
+
 ## Version 5.3: zoom in to pick the right address
 
 - When the tapped address matches more than one place within the offer's miles, the street names printed around the customer pin on your zoomed map decide: the match that actually has those streets within about half a mile wins. If they can't decide, the map's first estimate breaks the tie when exactly one match is near it.
