@@ -79,4 +79,41 @@ final class UberV47Tests: XCTestCase {
         let found = try XCTUnwrap(MapLocator.locatePickup(pins: pins, me: me, dropoff: cust))
         XCTAssertLessThan(Geo.straightMiles(found, store) * 1609, 5)
     }
+
+    // Version 5.6: Uber "Add a delivery" (stacked) offer — the only price has a "+" in front.
+    func testAddADeliveryOfferWithPlusPrice() {
+        for price in ["+ $1.91", "+$1.91"] {
+            let text = """
+            Add a delivery
+            Exclusive
+            \(price)
+            Guaranteed (incl. tip)
+            + 13 min (+ 1.4 mi) total
+            McDonald's® (5136 NESCONSET HWY)
+            Gnarled Oak Dr & Musket Pl, East
+            Setauket
+            Accept
+            """
+            let o = OfferParser.parse(text)
+            XCTAssertNotNil(o, price)
+            XCTAssertEqual(o?.app, .uber)
+            XCTAssertEqual(o?.pay ?? 0, 1.91, accuracy: 0.001)
+            XCTAssertEqual(o?.miles ?? 0, 1.4, accuracy: 0.001)
+            XCTAssertEqual(o?.minutes, 13)
+            XCTAssertNil(OfferParser.diagnose(text))
+        }
+    }
+
+    func testPeakPayAddOnStillIgnored() {
+        let text = """
+        $7.50
+        + $2.00 Peak pay
+        Guaranteed (incl. tip)
+        18 min (4.2 mi) total
+        Chipotle (1675 Sunrise Hwy)
+        Brook Ave & Garden St, Bay Shore
+        Accept
+        """
+        XCTAssertEqual(OfferParser.parse(text)?.pay ?? 0, 7.50, accuracy: 0.001)
+    }
 }

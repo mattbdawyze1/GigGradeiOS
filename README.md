@@ -27,6 +27,10 @@ The app reads gig offers live from your screen through iOS screen broadcasting (
 
 > The Offers log, screenshots and timer are shared between the screen reader and the app through the App Group. With a free Apple ID (Sideloadly) iOS may strip the App Group; if the Offers tab stays empty while banners still appear, that's why. TestFlight fixes it.
 
+## Version 5.6.1
+
+- Uber "Add a delivery" offers (the price has a "+" in front, e.g. "+ $1.91" for "+ 13 min (+ 1.4 mi) total") are read now. A "+" amount is only ignored when there's another price on screen (like "+ $2.00 Peak pay" next to the real pay). These offers are graded on the extra pay for the extra minutes and miles.
+
 ## Version 5.6: stop names and addresses
 
 - Every stop now has two fields: a **name** (store or customer) and a **full address**. Stops added by 👓 or by hand fill both.

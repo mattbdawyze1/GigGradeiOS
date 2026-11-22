@@ -260,15 +260,18 @@ public enum OfferParser {
         }
         // …otherwise the largest $ amount, ignoring "+$2.00" add-ons like peak pay.
         var values: [Double] = []
+        var plusValues: [Double] = []
         for line in lines {
             let ns = line as NSString
             for m in money.all(line) {
-                if m.range.location > 0,
-                   ns.substring(with: NSRange(location: m.range.location - 1, length: 1)) == "+" { continue }
-                if let g = m.groups[1] { values.append(toMoney(g)) }
+                guard let g = m.groups[1] else { continue }
+                // Is there a "+" right before the "$" (allowing a space: "+ $1.91")?
+                let before = ns.substring(to: m.range.location).trimmingCharacters(in: .whitespaces)
+                if before.hasSuffix("+") { plusValues.append(toMoney(g)) } else { values.append(toMoney(g)) }
             }
         }
-        return values.max()
+        // Uber "Add a delivery" offers show only the extra pay ("+ $1.91"): then that is the pay.
+        return values.max() ?? plusValues.max()
     }
 
     // MARK: miles
