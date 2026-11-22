@@ -223,13 +223,20 @@ final class RouteModel: ObservableObject {
     func navigate() -> Bool {
         guard !stops.isEmpty else { return false }
         let batch = Array(stops.prefix(Self.googleMapsMaxStops))
-        let ll = { (c: Coord) in "\(c.lat),\(c.lng)" }
-        let waypoints = batch.dropLast().map { ll($0.location) }.joined(separator: "|")
+        // Each stop goes to Google Maps as its address text (no name), so Google finds the exact address
+        // instead of snapping a map point to the building next door. Stops with no saved address use the pin.
+        let target = { (s: Stop) -> String in
+            if let a = s.nameAndAddress.address?.trimmingCharacters(in: .whitespacesAndNewlines), !a.isEmpty {
+                return a.replacingOccurrences(of: "|", with: " ")
+            }
+            return "\(s.location.lat),\(s.location.lng)"
+        }
+        let waypoints = batch.dropLast().map(target).joined(separator: "|")
         var comps = URLComponents(string: "https://www.google.com/maps/dir/")!
         comps.queryItems = [
             URLQueryItem(name: "api", value: "1"),
             URLQueryItem(name: "travelmode", value: "driving"),
-            URLQueryItem(name: "destination", value: ll(batch.last!.location)),
+            URLQueryItem(name: "destination", value: target(batch.last!)),
         ] + (waypoints.isEmpty ? [] : [URLQueryItem(name: "waypoints", value: waypoints)])
         if let url = comps.url { UIApplication.shared.open(url) }
         return stops.count > batch.count

@@ -29,6 +29,7 @@ The app reads gig offers live from your screen through iOS screen broadcasting (
 
 ## Version 5.6.1
 
+- Navigate sends each stop to Google Maps as its address text (no name) instead of a map point, so Google goes to the exact address rather than the building next door. Stops without a saved address still use their pin.
 - Uber "Add a delivery" offers (the price has a "+" in front, e.g. "+ $1.91" for "+ 13 min (+ 1.4 mi) total") are read now. A "+" amount is only ignored when there's another price on screen (like "+ $2.00 Peak pay" next to the real pay). These offers are graded on the extra pay for the extra minutes and miles.
 
 ## Version 5.6: stop names and addresses
