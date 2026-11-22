@@ -244,11 +244,28 @@ public struct Stop: Codable, Equatable, Identifiable, Hashable {
     public var orderId: String
     /// A dropoff can belong to more than one pickup (two orders going to one address).
     public var extraOrderIds: [String]?
+    /// The full address ("24 Kensington Way, Port Jefferson Station, NY 11776"). `label` is the name.
+    public var address: String?
 
     public init(id: UUID = UUID(), type: StopType, label: String, location: Coord, orderId: String,
-                extraOrderIds: [String]? = nil) {
+                extraOrderIds: [String]? = nil, address: String? = nil) {
         self.id = id; self.type = type; self.label = label; self.location = location; self.orderId = orderId
-        self.extraOrderIds = extraOrderIds
+        self.extraOrderIds = extraOrderIds; self.address = address
+    }
+
+    /// Name and address as two fields. Older stops kept both in the label ("Mike R · 15 France St").
+    public var nameAndAddress: (name: String, address: String?) {
+        if let address, !address.isEmpty { return (label, address) }
+        let parts = label.components(separatedBy: " · ")
+        if parts.count >= 2 { return (parts[0], parts.dropFirst().joined(separator: " · ")) }
+        return (label, nil)
+    }
+
+    /// The street part of the address ("24 Kensington Way").
+    public var street: String? {
+        nameAndAddress.address.map { a in
+            a.split(separator: ",").first.map { String($0).trimmingCharacters(in: .whitespaces) } ?? a
+        }
     }
 
     /// Every order this stop is part of.

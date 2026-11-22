@@ -27,6 +27,13 @@ The app reads gig offers live from your screen through iOS screen broadcasting (
 
 > The Offers log, screenshots and timer are shared between the screen reader and the app through the App Group. With a free Apple ID (Sideloadly) iOS may strip the App Group; if the Offers tab stays empty while banners still appear, that's why. TestFlight fixes it.
 
+## Version 5.6: stop names and addresses
+
+- Every stop now has two fields: a **name** (store or customer) and a **full address**. Stops added by 👓 or by hand fill both.
+- Route tab rows look the same when collapsed ("3. Mike R · 15 France St", cut off with … if long). **Tap a row** to expand it and see the full name and full address; tap again to collapse.
+- **Swipe left** on a stop: 🗑 Delete or ✏️ Edit. Edit lets you fix the name and the address (with address suggestions as you type, like adding a stop by hand). Choosing a suggestion, or saving a typed address, moves the pin to the new spot. Return/Done on the keyboard, or the Done button above it, puts the keyboard away.
+- Older stops that had "name · street" in one label are split into the two fields automatically.
+
 ## Version 5.5: 👓 for DoorDash
 
 - 👓 now also appears on DoorDash offers (after you mark them ✓). While it's on, GigGrade reads:

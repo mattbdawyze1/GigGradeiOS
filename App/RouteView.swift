@@ -155,21 +155,33 @@ final class RouteModel: ObservableObject {
         Task { await Cloud.shared.schedulePushState() }
     }
 
-    func add(label: String, location: Coord, type: StopType) -> String? {
+    func add(name: String, address: String, location: Coord, type: StopType) -> String? {
         guard stops.count < TripPlanner.maxStops else { return "Max \(TripPlanner.maxStops) stops — finish one first." }
         var planner = TripPlanner(stops: store.stops)
-        planner.add(Stop(type: type, label: label, location: location, orderId: UUID().uuidString))
+        planner.add(Stop(type: type, label: name, location: location, orderId: UUID().uuidString, address: address))
         store.stops = planner.stops
         reload(force: true)
         Task { await Cloud.shared.schedulePushState() }
         return nil
     }
 
+    /// Edit a stop's name and address (from the ✏️ swipe). A new address moves the stop to that spot.
+    func update(_ id: UUID, name: String, address: String, location: Coord?) {
+        var list = store.stops
+        guard let i = list.firstIndex(where: { $0.id == id }) else { return }
+        list[i].label = name
+        list[i].address = address.isEmpty ? nil : address
+        if let location { list[i].location = location }
+        store.stops = list
+        reload(force: true)
+        Task { await Cloud.shared.schedulePushState() }
+    }
+
     func add(query: String, type: StopType) async -> String? {
         guard stops.count < TripPlanner.maxStops else { return "Max \(TripPlanner.maxStops) stops — finish one first." }
         guard let loc = await PlaceFinder.find(query, near: store.currentLocation) else { return "Couldn't find “\(query)”." }
         var planner = TripPlanner(stops: store.stops)
-        planner.add(Stop(type: type, label: query, location: loc, orderId: UUID().uuidString))
+        planner.add(Stop(type: type, label: query, location: loc, orderId: UUID().uuidString, address: query))
         store.stops = planner.stops
         reload(force: true)
         Task { await Cloud.shared.schedulePushState() }
@@ -301,7 +313,9 @@ struct RouteView: View {
     @State private var camera: MapCameraPosition = .automatic
     @State private var query = ""
     @State private var message: String?
-    @State private var picked: (label: String, coord: Coord)?
+    @State private var picked: (label: String, title: String, coord: Coord)?
+    @State private var expanded = Set<UUID>()
+    @State private var editing: Stop?
     @StateObject private var completer = AddressCompleter()
     @State private var editMode: EditMode = .inactive
     @State private var showBatchNote = false
@@ -360,7 +374,13 @@ struct RouteView: View {
                             HStack {
                                 Image(systemName: s.type == .pickup ? "bag.fill" : "house.fill")
                                     .foregroundStyle(s.type == .pickup ? .blue : .green)
-                                Text("\(i + 1). \(s.label)").lineLimit(1)
+                                stopText(i, s)
+                                    .contentShape(Rectangle())
+                                    .onTapGesture {
+                                        withAnimation(.snappy) {
+                                            if expanded.contains(s.id) { expanded.remove(s.id) } else { expanded.insert(s.id) }
+                                        }
+                                    }
                                 ForEach(model.letters(for: s), id: \.self) { letter in
                                     Text(letter)
                                         .font(.caption2.weight(.bold))
@@ -400,6 +420,10 @@ struct RouteView: View {
                                     }
                                     Button("Done") { model.complete(s) }.buttonStyle(.bordered)
                                 }
+                            }
+                            .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                                Button(role: .destructive) { model.complete(s) } label: { Label("Delete", systemImage: "trash") }
+                                Button { editing = s } label: { Label("Edit", systemImage: "pencil") }.tint(.orange)
                             }
                         }
                         .onMove { from, to in message = model.move(from: from, to: to) }
@@ -484,6 +508,11 @@ struct RouteView: View {
                 }
             }
         }
+        .sheet(item: $editing) { stop in
+            StopEditView(stop: stop) { name, address, location in
+                model.update(stop.id, name: name, address: address, location: location)
+            }
+        }
         .alert("First 9 stops sent", isPresented: $showBatchNote) {
             Button("OK", role: .cancel) {}
         } message: {
@@ -501,7 +530,7 @@ struct RouteView: View {
         guard !q.isEmpty else { return }
         typing = false
         if let picked {
-            message = model.add(label: picked.label, location: picked.coord, type: type)
+            message = model.add(name: picked.title, address: picked.label, location: picked.coord, type: type)
             if message == nil { reset() }
             return
         }
@@ -520,6 +549,24 @@ struct RouteView: View {
             } else {
                 message = "Couldn't find that place. Try another suggestion."
             }
+        }
+    }
+
+    /// Collapsed: "3. Mike R · 15 France St" on one line. Expanded (tap): the name, then the full address.
+    @ViewBuilder
+    private func stopText(_ i: Int, _ s: Stop) -> some View {
+        let parts = s.nameAndAddress
+        if expanded.contains(s.id) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("\(i + 1). \(parts.name)").fixedSize(horizontal: false, vertical: true)
+                Text(parts.address ?? "No address saved — swipe left and tap ✏️ to add one.")
+                    .font(.footnote).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .textSelection(.enabled)
+            }
+        } else {
+            let suffix = (parts.address == nil || parts.address == parts.name) ? "" : (s.street.map { " · " + $0 } ?? "")
+            Text("\(i + 1). " + parts.name + suffix).lineLimit(1)
         }
     }
 
@@ -569,10 +616,11 @@ final class AddressCompleter: NSObject, ObservableObject, MKLocalSearchCompleter
     nonisolated func completer(_ completer: MKLocalSearchCompleter, didFailWithError error: Error) {}
 
     /// Turns a tapped suggestion into an exact map location.
-    func resolve(_ item: MKLocalSearchCompletion) async -> (label: String, coord: Coord)? {
+    /// label = the full text ("Chipotle, 1675 Sunrise Hwy, Bay Shore"), title = just the first part ("Chipotle").
+    func resolve(_ item: MKLocalSearchCompletion) async -> (label: String, title: String, coord: Coord)? {
         let request = MKLocalSearch.Request(completion: item)
         guard let mapItem = try? await MKLocalSearch(request: request).start().mapItems.first else { return nil }
         let label = item.subtitle.isEmpty ? item.title : "\(item.title), \(item.subtitle)"
-        return (label, Coord(mapItem.placemark.coordinate))
+        return (label, item.title, Coord(mapItem.placemark.coordinate))
     }
 }

@@ -115,10 +115,12 @@ enum GuidePlanner {
             var orderId = UUID().uuidString
             var didLink = false
             if let order = pickupOrder(for: i) { orderId = order; didLink = true }
-            let label = section.type == .pickup ? section.name : "\(section.name) · \(street(address))"
-            var trial = stops + [Stop(type: section.type, label: label, location: coord, orderId: orderId)]
+            // Two fields: the name (store / customer) and the full address.
+            let label = section.name
+            var trial = stops + [Stop(type: section.type, label: label, location: coord, orderId: orderId, address: address)]
             if didLink, !TripPlanner.isValidOrder(trial) { // never put a dropoff ahead of its pickup
-                trial = stops + [Stop(type: section.type, label: label, location: coord, orderId: UUID().uuidString)]
+                trial = stops + [Stop(type: section.type, label: label, location: coord, orderId: UUID().uuidString,
+                                      address: address)]
                 didLink = false
             }
             if didLink { linked += 1 }
@@ -151,24 +153,20 @@ enum GuidePlanner {
         return !x.isEmpty && !y.isEmpty && (x == y || x.contains(y) || y.contains(x))
     }
 
-    /// "27 Virgil Dr, Brentwood, NY" -> "27 Virgil Dr"
-    private static func street(_ address: String) -> String {
-        address.split(separator: ",").first.map { String($0).trimmingCharacters(in: .whitespaces) } ?? address
-    }
-
     /// A route stop that is this Trip Guide stop: same house number + street, or (for stops without an address
     /// read yet) the same name, e.g. a pickup you added from an offer banner.
     static func match(_ section: GuideSection, in stops: [Stop]) -> Stop? {
         // Same address (house number + street) of the same kind: never added twice.
         if let address = section.address, let key = TripGuide.addressKey(address),
-           let s = stops.first(where: { $0.type == section.type && TripGuide.addressKey($0.label) == key }) {
+           let s = stops.first(where: { $0.type == section.type
+                                        && TripGuide.addressKey($0.nameAndAddress.address ?? $0.label) == key }) {
             return s
         }
         // Same name (e.g. a store added from an offer banner, or a stop 👓 added before).
         return stops.first { $0.type == section.type && sameName(nameOnly($0.label), section.name) }
     }
 
-    /// The name part of a label ("Kevin D. · 27 Virgil Dr" -> "Kevin D.").
+    /// The name part of a label (older stops: "Kevin D. · 27 Virgil Dr" -> "Kevin D.").
     static func nameOnly(_ label: String) -> String {
         label.components(separatedBy: " · ").first ?? label
     }
