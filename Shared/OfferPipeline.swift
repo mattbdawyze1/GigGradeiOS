@@ -161,47 +161,16 @@ final class OfferPipeline {
                             hint: holdVerdict ? OfferAlert.tapPinHint : nil)
         }
 
-        // 2) Locate pickup/dropoff (text first, map as backup and cross-check; Uber name-only stores: map first),
-        //    run the check, post.
+        // 2) Locate pickup/dropoff (text first, map as backup and cross-check), run the check, post.
         Task {
-            if pins != nil { await Cloud.shared.pullSettingsIntoStore(force: true) } // freshest GPS: the map's dot is "now"
             let near = store.currentLocation
-            // Uber cross streets ("Main St & Oak Ave, Smithtown"): the corner from the text wins over the map.
-            var dropoffFromText = false
-            var dropoffCoord: Coord?
-            if offer.app == .uber, MapLocator.isCrossStreet(offer.dropoffText),
-               let corner = await PlaceFinder.corner(offer.dropoffText, near: near) {
-                dropoffCoord = corner; dropoffFromText = true
-            } else {
-                dropoffCoord = await PlaceFinder.find(offer.dropoffText, near: near)
-            }
-            var estimated = false
-            var streets: String?
-            var pickupCoord: Coord?
-            var pickupEstimated = false
-            var pickupFromMap = false
-
-            // Uber card with only the store's name: the store pin on Uber's map goes first.
-            // 1) Every place with that name is lined up with the store pin; the one that fits the map is the store.
-            // 2) None fits: the store is placed straight from its pin (you + the customer as references, ≈),
-            //    snapped to a store of that name if one is right there.
-            // Uber gives the customer only as a street + town ("Bicycle Path, Port Jefferson Station"), which can be
-            // miles long, so the customer pin on the map wins whenever the map can be read.
-            let roughDropoff = offer.app == .uber && MapLocator.isNameOnly(offer.dropoffText) && !dropoffFromText
-            let mapUsable = pins.map { $0.me != nil && !$0.stores.isEmpty && !$0.customers.isEmpty } ?? false
-            if offer.app == .uber, MapLocator.isNameOnly(offer.pickupText), let pins, mapUsable,
-               let me = store.currentLocation {
-                let m = await self.uberStoreFromMap(offer: offer, pins: pins, me: me, textDropoff: dropoffCoord)
-                if let pc = m.pickup {
-                    pickupCoord = pc; pickupEstimated = m.pickupEstimated; pickupFromMap = true
-                    if let dc = m.dropoff, !dropoffFromText { dropoffCoord = dc; estimated = true }
-                }
-            }
-            // Otherwise (or the map couldn't place it): the card's text through Apple Maps.
-            if pickupCoord == nil { pickupCoord = await PlaceFinder.find(offer.pickupText, near: near) }
+            var pickupCoord = await PlaceFinder.find(offer.pickupText, near: near)
             if pickupCoord == nil, let name = offer.pickupText, let town = PlaceFinder.town(in: offer.dropoffText) {
                 pickupCoord = await PlaceFinder.find("\(name), \(town)", near: near) // name-only stores
             }
+            var dropoffCoord = await PlaceFinder.find(offer.dropoffText, near: near)
+            var estimated = false
+            var streets: String?
 
             // Every store on the card (batches list two), looked up at the same time.
             var knownStores: [Coord] = pickupCoord.map { [$0] } ?? []
@@ -212,60 +181,48 @@ final class OfferPipeline {
                     for await c in group { if let c { knownStores.append(c) } }
                 }
             }
-            var batch = Batch(stores: knownStores.enumerated().map { (coord: $0.element, estimated: $0.offset == 0 && pickupEstimated) },
-                              customers: [], unchecked: 0)
+            var batch = Batch(stores: knownStores.map { (coord: $0, estimated: false) }, customers: [], unchecked: 0)
 
             if let pins {
+                await Cloud.shared.pullSettingsIntoStore(force: true) // freshest GPS: the map's arrow/dot is "now"
                 // Every pin: the card's stores confirm the map; stores and customers not on the card are
                 // estimated from their pins (≈).
                 if let me = store.currentLocation,
                    let placed = MapLocator.placeAll(pins: pins, me: me, known: knownStores, statedMiles: offer.miles) {
-                    batch.stores = placed.stores.map { s in
-                        // A store placed from its pin stays marked ≈ even though it was passed in as known.
-                        (coord: s.coord, estimated: s.estimated || (pickupEstimated && s.coord == pickupCoord))
-                    }
+                    batch.stores = placed.stores
                     batch.customers = placed.customers
                 }
                 if let me = store.currentLocation {
-                    if !pickupFromMap, !dropoffFromText, let pc = pickupCoord,
+                    if let pc = pickupCoord,
                        let est = MapLocator.locate(pins: pins, me: me, store: pc, statedMiles: offer.miles) {
                         // Use the map when there's no dropoff address, or when the address lookup landed
                         // far from where the map's pin actually is (wrong match).
-                        if dropoffCoord == nil || roughDropoff || Geo.straightMiles(dropoffCoord!, est.finalDropoff) > 1.0 {
+                        if dropoffCoord == nil || Geo.straightMiles(dropoffCoord!, est.finalDropoff) > 1.0 {
                             dropoffCoord = est.finalDropoff
                             estimated = true
                         }
                     }
                     if pickupCoord == nil, let dc = dropoffCoord,
                        let pc = MapLocator.locatePickup(pins: pins, me: me, dropoff: dc) {
-                        pickupCoord = pc; pickupEstimated = true // store name Apple Maps couldn't find
+                        pickupCoord = pc // store name Apple Maps couldn't find
                     }
                 }
                 if dropoffCoord == nil, offer.app != .doordash, // DoorDash: the tapped address replaces this guess
                    let s = await self.streetEstimate(lines: lines, pins: pins, pickup: pickupCoord, offer: offer) {
                     dropoffCoord = s.coord; estimated = true; streets = s.names
-                    // Store still unknown: try its pin again now that the customer is placed.
-                    if pickupCoord == nil, let me = store.currentLocation,
-                       let pc = MapLocator.locatePickup(pins: pins, me: me, dropoff: s.coord) {
-                        pickupCoord = pc; pickupEstimated = true
-                    }
                 }
             }
 
             // Stores the card or the map showed that couldn't be placed (e.g. pins stacked on top of each other).
-            if batch.stores.isEmpty, let pc = pickupCoord { batch.stores = [(coord: pc, estimated: pickupEstimated)] }
+            if batch.stores.isEmpty, let pc = pickupCoord { batch.stores = [(coord: pc, estimated: false)] }
             let expectedStores = max(offer.pickupTexts.count, pins?.stores.count ?? 0, 1)
             batch.unchecked = max(0, expectedStores - batch.stores.count)
             self.lock.lock(); self.batches = [key: batch]; self.lock.unlock()
 
-            // Uber, map not readable yet (it's often still drawing when the offer pops up): don't send a verdict
-            // from the street/name text alone. Keep reading the map every ½ s; after 4 s, send the text-based one.
-            let waitForMap = offer.app == .uber && !mapUsable
-                && (roughDropoff || MapLocator.isNameOnly(offer.pickupText))
             let done = await self.finish(key: key, offer: offer, saved: saved, score: score, settings: settings,
                                          prefs: prefs, pickup: pickupCoord, dropoff: dropoffCoord,
                                          estimated: estimated, streets: streets, gate: gate,
-                                         announce: !holdVerdict && !waitForMap)
+                                         announce: !holdVerdict)
             // Keep watching this offer while it stays on screen (up to 90 s):
             // - customer not placed yet: re-read the map every 2 s (zoom in on the customer pin to help);
             // - DoorDash: tap a customer pin and its address bubble ("54 Elderwood Lane") is used to pin it exactly.
@@ -277,14 +234,7 @@ final class OfferPipeline {
                                      prefs: prefs, pickup: pickupCoord, until: Date().addingTimeInterval(90),
                                      located: done.found, note: done.note, dropoff: dropoffCoord,
                                      dropoffEstimated: estimated, holdVerdict: holdVerdict,
-                                     verdictSent: !holdVerdict && !waitForMap)
-                if waitForMap {
-                    self.rescue?.located = false
-                    self.rescue?.waitingForMap = true
-                    self.rescue?.mapDeadline = now.addingTimeInterval(4)
-                    self.rescue?.gate = gate
-                    self.rescue?.dropoffFromText = dropoffFromText
-                }
+                                     verdictSent: !holdVerdict)
             }
             self.lock.unlock()
         }
@@ -299,7 +249,7 @@ final class OfferPipeline {
         let score: Score
         let settings: DriverSettings
         let prefs: NotificationPrefs
-        var pickup: Coord?
+        let pickup: Coord?
         let until: Date
         var located: Bool
         var note: String?
@@ -312,10 +262,6 @@ final class OfferPipeline {
         var ambiguous = false        // last tap matched several places; keep re-checking while the bubble is up
         var lastTry = Date.distantPast
         var busy = false
-        var waitingForMap = false    // Uber: verdict held until the map is read (or mapDeadline passes)
-        var mapDeadline = Date.distantPast
-        var gate: PostOnce?          // shared with the first banner, so only one of them goes out first
-        var dropoffFromText = false  // Uber cross-street corner: the map never replaces it
     }
     private var rescue: Rescue?
 
@@ -330,10 +276,9 @@ final class OfferPipeline {
         // ambiguous, it's re-checked every 3 s as you zoom, in case more street names come into view.
         let newPopup = popupKey != nil && (popupKey != r.lastPopup
                                            || (r.ambiguous && now.timeIntervalSince(r.lastPopupTry) >= 3))
-        let mapDue = !r.located && now.timeIntervalSince(r.lastTry) >= (r.waitingForMap ? 0.5 : 2)
-        let giveUp = r.waitingForMap && now > r.mapDeadline
+        let mapDue = !r.located && now.timeIntervalSince(r.lastTry) >= 2
         r.lastPopup = popupKey
-        guard newPopup || mapDue || giveUp else { rescue = r; lock.unlock(); return }
+        guard newPopup || mapDue else { rescue = r; lock.unlock(); return }
         r.busy = true
         if mapDue { r.lastTry = now }
         if newPopup { r.lastPopupTry = now }
@@ -341,10 +286,6 @@ final class OfferPipeline {
         lock.unlock()
 
         let pins = mapPins?(r.offer.app) // must run now, while this frame is still here
-        if r.waitingForMap {
-            Task { await self.resolveHeldUber(key: key, r: r, pins: pins, giveUp: giveUp) }
-            return
-        }
         Task {
             var place: (coord: Coord, estimated: Bool, label: String?, streets: String?)?
             var ambiguous = false
@@ -406,88 +347,6 @@ final class OfferPipeline {
                 }
             }
             lock.unlock()
-        }
-    }
-
-    /// Uber, store name only: the green pin wins. The store is placed straight from its pin (your arrow + the
-    /// card's total miles set the map's scale). If a store with that name is right there, its exact spot is used
-    /// (no ≈) and the customer is re-placed with it; otherwise the pin's spot is used (≈). The name is never
-    /// used to pick a location away from the pin.
-    private func uberStoreFromMap(offer: Offer, pins: MapPins, me: Coord, textDropoff: Coord?) async
-        -> (pickup: Coord?, pickupEstimated: Bool, dropoff: Coord?) {
-        guard let name = offer.pickupText else { return (nil, false, nil) }
-        let named = await PlaceFinder.storeCandidates(name, near: me)
-        if let est = MapLocator.placeByMiles(pins: pins, me: me, statedMiles: offer.miles) {
-            // The pin's spot is only as good as the miles (roads vs straight lines), so allow 20% of the distance.
-            let reach = max(0.3, 0.2 * Geo.straightMiles(me, est.store))
-            if let snap = named.filter({ Geo.straightMiles($0, est.store) <= reach })
-                .min(by: { Geo.straightMiles($0, est.store) < Geo.straightMiles($1, est.store) }) {
-                let exact = MapLocator.locate(pins: pins, me: me, store: snap, statedMiles: offer.miles)
-                return (snap, false, exact?.finalDropoff ?? est.customers.last)
-            }
-            return (est.store, true, est.customers.last)
-        }
-        // No miles on the card: line each place with that name up with the pin instead.
-        if let pick = MapLocator.pickStore(pins: pins, me: me, candidates: named, statedMiles: offer.miles,
-                                           dropoff: textDropoff) {
-            return (pick.store, false, pick.customers.last)
-        }
-        if let dc = textDropoff, let est = MapLocator.locatePickup(pins: pins, me: me, dropoff: dc) {
-            let snap = named.filter { Geo.straightMiles($0, est) <= 0.3 }
-                .min { Geo.straightMiles($0, est) < Geo.straightMiles($1, est) }
-            return (snap ?? est, snap == nil, nil)
-        }
-        return (nil, false, nil)
-    }
-
-    /// Uber verdict held because the map wasn't readable on the first scan. Each new scan tries the map again;
-    /// once it reads, the verdict goes out from the map. After 4 s it goes out from the card's text instead.
-    private func resolveHeldUber(key: String, r: Rescue, pins: MapPins?, giveUp: Bool) async {
-        var pickup = r.pickup, pickupEst = false
-        var dropoff: Coord? = r.dropoffFromText ? r.dropoff : nil  // the cross-street corner stays
-        var mapRead = false
-        if let pins, pins.me != nil, !pins.stores.isEmpty, !pins.customers.isEmpty, let me = store.currentLocation {
-            mapRead = true
-            if MapLocator.isNameOnly(r.offer.pickupText) {
-                let m = await uberStoreFromMap(offer: r.offer, pins: pins, me: me, textDropoff: r.dropoff)
-                if let pc = m.pickup {
-                    pickup = pc; pickupEst = m.pickupEstimated
-                    if !r.dropoffFromText { dropoff = m.dropoff }
-                }
-            }
-            if dropoff == nil, let pc = pickup, !pickupEst,
-               let est = MapLocator.locate(pins: pins, me: me, store: pc, statedMiles: r.offer.miles) {
-                dropoff = est.finalDropoff
-            }
-        }
-        if mapRead, let dropoff {
-            if let pickup {
-                lock.lock(); batches[key] = Batch(stores: [(coord: pickup, estimated: pickupEst)], customers: [], unchecked: 0); lock.unlock()
-            }
-            let done = await finish(key: key, offer: r.offer, saved: r.saved, score: r.score, settings: r.settings,
-                                    prefs: r.prefs, pickup: pickup, dropoff: dropoff, estimated: !r.dropoffFromText,
-                                    streets: nil, gate: r.gate, previousNote: nil, announce: true, force: r.gate == nil)
-            lock.lock()
-            if rescue?.key == key {
-                rescue?.busy = false; rescue?.waitingForMap = false; rescue?.verdictSent = true
-                rescue?.located = done.found; rescue?.pickup = pickup
-                rescue?.dropoff = dropoff; rescue?.dropoffEstimated = !r.dropoffFromText; rescue?.note = done.note
-            }
-            lock.unlock()
-        } else if giveUp {
-            // The map never read: the card's text is the best there is.
-            let done = await finish(key: key, offer: r.offer, saved: r.saved, score: r.score, settings: r.settings,
-                                    prefs: r.prefs, pickup: r.pickup, dropoff: r.dropoff, estimated: r.dropoffEstimated,
-                                    streets: nil, gate: r.gate, previousNote: nil, announce: true, force: true)
-            lock.lock()
-            if rescue?.key == key {
-                rescue?.busy = false; rescue?.waitingForMap = false; rescue?.verdictSent = true
-                rescue?.located = false   // keep reading the map every 2 s: an updated banner if the verdict changes
-                rescue?.note = done.note
-            }
-            lock.unlock()
-        } else {
-            lock.lock(); if rescue?.key == key { rescue?.busy = false }; lock.unlock()
         }
     }
 

@@ -35,24 +35,6 @@ Each graded offer now saves its pickup detour (worst store's extra miles) and dr
 order adds). Run the 5.9 lines at the bottom of `supabase/setup.sql` before installing. Only offers graded on
 5.9 or later have detour numbers.
 
-5.10.0: Uber customer given as cross streets ("Main St & Oak Ave, Smithtown"): the corner from the text wins and
-the map never replaces it. Only if that exact corner can't be found does the customer pin decide. A single street
-("Bicycle Path, Port Jefferson Station") still goes to the customer pin.
-
-5.9.9: Uber, store name only: the green pin wins. The store is placed straight from its pin (your arrow plus the
-card's total miles set the map's scale, Uber's map is north-up). If a store with that name is right at that spot
-(within 0.3 mi or 20% of its distance), its exact location is used; otherwise the pin's spot (≈). The name is
-never used to choose a location away from the pin.
-
-5.9.8: Uber gives the customer only as a street + town (a long road can be miles), so the customer pin on Uber's
-map now always wins when the map can be read. If the map isn't readable on the first scan (it's often still
-drawing), the verdict waits: the map is re-read every ½ s, and after 4 s the text-based verdict goes out instead.
-
-5.9.7: Uber offers that show only the store's name use the store pin on Uber's map first. Every place with that
-name is lined up with the store pin, and the one that fits the map (angle, scale, the offer's miles, the customer's
-address) is used. If none fits, the store is placed from its pin (≈), snapped to a store of that name within 0.3 mi.
-Apple Maps text search is the backup. The store pin is also retried after the street-name estimate places the customer.
-
 5.9.6: both route checks are radii from a target. 🛍 store from the nearest pickup in your route, 🏠 customer
 from your last stop (or from you with no route). CLOSE BY ✅ inside the Close by radius, ON THE WAY ⚠️ inside the
 On the way radius, otherwise OFF ROUTE ❌. On the way is never smaller than Close by. Extra miles are shown as

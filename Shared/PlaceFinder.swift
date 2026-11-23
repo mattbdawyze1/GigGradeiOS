@@ -17,17 +17,6 @@ enum PlaceFinder {
         return parts.isEmpty ? p.name : parts.joined(separator: ", ")
     }
 
-    /// The corner itself for cross streets ("Main St & Oak Ave, Smithtown"): the text as written, then with
-    /// "and" / "at". Unlike `find`, never falls back to just one of the streets.
-    static func corner(_ query: String?, near: Coord?) async -> Coord? {
-        guard let query = query?.trimmingCharacters(in: .whitespaces), query.contains("&") else { return nil }
-        for attempt in [query, query.replacingOccurrences(of: "&", with: "and"), query.replacingOccurrences(of: "&", with: "at")] {
-            if let c = await search(attempt, near: near) { return c }
-            if let c = await geocode(attempt, near: near) { return c }
-        }
-        return nil
-    }
-
     /// The town at the end of "Partridge Ln & Pheasant Ln, East Setauket" -> "East Setauket".
     static func town(in text: String?) -> String? {
         guard let text, let last = text.split(separator: ",").last, text.contains(",") else { return nil }
@@ -102,18 +91,6 @@ enum PlaceFinder {
         if let marks = try? await CLGeocoder().geocodeAddressString(query, in: region) {
             found += marks.compactMap { $0.location?.coordinate }.map { Coord($0) }
         }
-        guard let near else { return found }
-        return found.filter { Geo.straightMiles(near, $0) < 40 }
-    }
-
-    /// Every place with this store name within 40 mi (e.g. each McDonald's), so the map can pick the right one.
-    static func storeCandidates(_ name: String, near: Coord?) async -> [Coord] {
-        let req = MKLocalSearch.Request()
-        req.naturalLanguageQuery = name
-        req.resultTypes = .pointOfInterest
-        if let near { req.region = MKCoordinateRegion(center: near.cl, latitudinalMeters: 50_000, longitudinalMeters: 50_000) }
-        guard let resp = try? await MKLocalSearch(request: req).start() else { return [] }
-        let found = resp.mapItems.map { Coord($0.placemark.coordinate) }
         guard let near else { return found }
         return found.filter { Geo.straightMiles(near, $0) < 40 }
     }
