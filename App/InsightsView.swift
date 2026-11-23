@@ -161,9 +161,9 @@ struct InsightsView: View {
 }
 
 
-/// Detours, 0 to 5+ mi: how many offers fell in each range, what they paid per mile, and how many you took.
-/// 🛍 = extra miles to fit the store into your route, 🏠 = extra miles the whole order adds.
-/// Dashed lines show your current limits (Home settings), so they move when you change them.
+/// Miles from the target, 0 to 5+ mi: how many offers fell in each range, what they paid per mile, and how many
+/// you took. 🛍 = store from the nearest pickup in your route, 🏠 = customer from your last stop.
+/// Dashed lines show your Close by and On the way radii (Home settings), so they move when you change them.
 struct DetourCharts: View {
     let records: [OfferRecord]
     let settings: DriverSettings
@@ -179,7 +179,7 @@ struct DetourCharts: View {
 
         Section {
             if counted == 0 {
-                Text("No detour data for this period yet. Offers graded from version 5.9 on are counted here.")
+                Text("No distance data for this period yet. Offers graded from version 5.9.6 on are counted here.")
                     .font(.footnote).foregroundStyle(.secondary)
             } else {
                 Chart {
@@ -196,9 +196,9 @@ struct DetourCharts: View {
                 .frame(height: 200)
             }
         } header: {
-            Text("Offers by detour")
+            Text("Offers by distance from target")
         } footer: {
-            if counted > 0 { Text("🛍 extra miles to fit the store into your route · 🏠 extra miles the whole order adds. Dashed lines = your limits.") }
+            if counted > 0 { Text("🛍 store from the nearest pickup in your route · 🏠 customer from your last stop. Short dashes = Close by, long dashes = On the way.") }
         }
 
         if counted > 0 {
@@ -233,12 +233,12 @@ struct DetourCharts: View {
                 .modifier(DetourAxis())
                 .frame(height: 190)
             } header: {
-                Text("Pay per mile by detour")
+                Text("Pay per mile by distance from target")
             } footer: {
                 Text("Green and yellow lines are your good and fair $/mi.")
             }
 
-            Section("Accepted by detour") {
+            Section("Accepted by distance from target") {
                 Chart {
                     ForEach(all.filter { $0.offers > 0 }) { b in
                         let left = Double(b.index) + (b.kind == .pickup ? 0.08 : 0.5)
@@ -261,7 +261,7 @@ struct DetourCharts: View {
 
             let lines = DetourStats.insights(records, settings: settings)
             if !lines.isEmpty {
-                Section("Detour takeaways") {
+                Section("Distance takeaways") {
                     ForEach(Array(lines.enumerated()), id: \.offset) { _, line in
                         Label(line, systemImage: "arrow.triangle.branch").font(.subheadline)
                     }
@@ -270,17 +270,23 @@ struct DetourCharts: View {
         }
     }
 
-    /// Dashed vertical lines at your pickup ON THE WAY limit and your dropoff max extra miles.
+    /// Dashed vertical lines at your radii: short dashes = Close by ✅, long dashes = On the way ⚠️.
+    private var radiusLines: [(kind: DetourStats.Kind, onTheWay: Bool, miles: Double)] {
+        DetourStats.Kind.allCases.flatMap { k -> [(kind: DetourStats.Kind, onTheWay: Bool, miles: Double)] in
+            let r = DetourStats.radii(k, settings)
+            return [(kind: k, onTheWay: false, miles: r.closeBy), (kind: k, onTheWay: true, miles: r.onTheWay)]
+        }
+    }
+
     @ChartContentBuilder
     private var limitLines: some ChartContent {
-        ForEach(DetourStats.Kind.allCases) { k in
-            let lim = min(DetourStats.limit(k, settings), 6)
-            RuleMark(x: .value("Limit", lim))
-                .foregroundStyle(Self.color(k))
-                .lineStyle(StrokeStyle(lineWidth: 1.5, dash: [5, 3]))
-                .annotation(position: .top, alignment: k == .pickup ? .trailing : .leading, spacing: 2) {
-                    Text((k == .pickup ? "🛍 " : "🏠 ") + String(format: "%.1f", DetourStats.limit(k, settings)))
-                        .font(.caption2.weight(.semibold)).foregroundStyle(Self.color(k))
+        ForEach(Array(radiusLines.enumerated()), id: \.offset) { _, line in
+            RuleMark(x: .value("Radius", min(line.miles, 6)))
+                .foregroundStyle(Self.color(line.kind))
+                .lineStyle(StrokeStyle(lineWidth: 1.5, dash: line.onTheWay ? [6, 3] : [2, 2]))
+                .annotation(position: line.kind == .pickup ? .top : .bottom, alignment: .center, spacing: 2) {
+                    Text((line.kind == .pickup ? "🛍" : "🏠") + (line.onTheWay ? "⚠️" : "✅") + String(format: "%.1f", line.miles))
+                        .font(.caption2.weight(.semibold)).foregroundStyle(Self.color(line.kind))
                 }
         }
     }
@@ -300,7 +306,7 @@ private struct DetourAxis: ViewModifier {
                     }
                 }
             }
-            .chartXAxisLabel("extra miles")
+            .chartXAxisLabel("miles from target")
             .chartForegroundStyleScale([DetourStats.Kind.pickup.rawValue: DetourCharts.pickupColor,
                                         DetourStats.Kind.dropoff.rawValue: DetourCharts.dropoffColor])
     }

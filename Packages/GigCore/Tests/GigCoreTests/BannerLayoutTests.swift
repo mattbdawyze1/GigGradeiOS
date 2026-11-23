@@ -51,10 +51,11 @@ final class BannerLayoutTests: XCTestCase {
     }
 
     func testShortVerdicts() {
-        XCTAssertEqual(TripPlanner.OnTheWay(verdict: .onTheWay, addedMiles: 0.8).shortMessage, "⚠️ ON THE WAY · only +0.8 mi")
+        XCTAssertEqual(TripPlanner.OnTheWay(verdict: .onTheWay, addedMiles: 0.8, dropoffToFinalMi: 2.1).shortMessage,
+                       "⚠️ ON THE WAY · ends 2.1 mi from last stop")
         XCTAssertEqual(TripPlanner.OnTheWay(verdict: .nearFinal, dropoffToFinalMi: 1.2, fromHere: true).shortMessage,
                        "✅ CLOSE BY · ends 1.2 mi from you")
         XCTAssertEqual(TripPlanner.OnTheWay(verdict: .offRoute, addedMiles: 5.6, dropoffToFinalMi: 7.2).shortMessage,
-                       "❌ OFF ROUTE · +5.6 mi extra")
+                       "❌ OFF ROUTE · ends 7.2 mi from last stop")
     }
 }

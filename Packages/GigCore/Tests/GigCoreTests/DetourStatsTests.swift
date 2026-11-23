@@ -1,7 +1,7 @@
 import XCTest
 @testable import GigCore
 
-/// Version 5.9: Insights detour charts (0 to 5+ mi).
+/// Version 5.9.6: Insights charts by miles from the target (0 to 5+ mi).
 final class DetourStatsTests: XCTestCase {
     func rec(_ pickup: Double?, _ drop: Double?, pay: Double, perMile: Double, _ d: Decision = .pending) -> OfferRecord {
         var r = OfferRecord(app: .uber, pay: pay, miles: pay / perMile, minutes: 20, pickupText: nil, dropoffText: nil,
@@ -29,8 +29,8 @@ final class DetourStatsTests: XCTestCase {
         var settings = DriverSettings()
         settings.pickupMaxDetourMi = 3.0
         let lines = DetourStats.insights(rs, settings: settings)
-        XCTAssertTrue(lines.contains("75% of pickup detours were within your 3.0 mi limit (3 of 4)."), "\(lines)")
-        XCTAssertTrue(lines.contains("50% of offers added under 1 mi at the pickup (2 of 4)."), "\(lines)")
-        XCTAssertTrue(lines.contains("Pickup detours of 2+ mi paid $1.00/mi on average vs $2.00/mi under 1 mi."), "\(lines)")
+        XCTAssertTrue(lines.contains("Pickups: 50% Close by (≤ 1.0 mi), 75% within On the way (≤ 3.0 mi)."), "\(lines)")
+        XCTAssertTrue(lines.contains("50% of pickups were under 1 mi from the target (2 of 4)."), "\(lines)")
+        XCTAssertTrue(lines.contains("Pickups 2+ mi from the target paid $1.00/mi on average vs $2.00/mi under 1 mi."), "\(lines)")
     }
 }

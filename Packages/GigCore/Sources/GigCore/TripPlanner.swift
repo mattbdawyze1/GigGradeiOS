@@ -121,6 +121,9 @@ public struct TripPlanner {
 
         public var good: Bool { verdict == .onTheWay || verdict == .nearFinal }
 
+        var mark: String { verdict == .nearFinal ? "✅" : verdict == .onTheWay ? "⚠️" : "❌" }
+        var word: String { verdict == .nearFinal ? "CLOSE BY" : verdict == .onTheWay ? "ON THE WAY" : "OFF ROUTE" }
+
         /// Short form for the banner (fits on one line).
         public var shortMessage: String {
             let text = shortText
@@ -133,12 +136,8 @@ public struct TripPlanner {
             case .noActiveTrip: return ""
             case .unknownLocation: return "Route check: couldn't locate"
             case .tooManyStops: return "Route full (\(TripPlanner.maxStops) stops)"
-            case .nearFinal where fromHere: return "✅ CLOSE BY · ends \(f(dropoffToFinalMi)) mi from you"
-            case .nearFinal: return "✅ CLOSE BY · ends \(f(dropoffToFinalMi)) mi from last stop"
-            case .onTheWay: return "⚠️ ON THE WAY · only +\(f(addedMiles)) mi"
-            case .offRoute where fromHere: return "❌ OFF ROUTE · ends \(f(dropoffToFinalMi)) mi from you"
-            case .offRoute where addedMiles == nil: return "❌ OFF ROUTE · ends \(f(dropoffToFinalMi)) mi from last stop"
-            case .offRoute: return "❌ OFF ROUTE · +\(f(addedMiles)) mi extra"
+            case .nearFinal, .onTheWay, .offRoute:
+                return "\(mark) \(word) · ends \(f(dropoffToFinalMi)) mi from \(fromHere ? "you" : "last stop")"
             }
         }
 
@@ -149,13 +148,10 @@ public struct TripPlanner {
             case .noActiveTrip: return "No active route — graded on its own."
             case .unknownLocation: return "Couldn't locate pickup/dropoff — on-the-way check skipped."
             case .tooManyStops: return "Route already has \(TripPlanner.maxStops) stops — finish one first."
-            // .nearFinal = ends near your final stop (or near you) -> CLOSE BY ✅
-            // .onTheWay  = only a small detour                      -> ON THE WAY ⚠️
-            case .nearFinal where fromHere: return "✅ CLOSE BY: ends \(f(dropoffToFinalMi)) mi from you"
-            case .nearFinal: return "✅ CLOSE BY: ends \(f(dropoffToFinalMi)) mi from your final stop (+\(f(addedMiles)) mi)\(perMile)"
-            case .onTheWay: return "⚠️ ON THE WAY: only +\(f(addedMiles)) mi extra\(perMile)"
-            case .offRoute where fromHere: return "❌ OFF ROUTE: ends \(f(dropoffToFinalMi)) mi from you"
-            case .offRoute: return "❌ OFF ROUTE: +\(f(addedMiles)) mi extra, ends \(f(dropoffToFinalMi)) mi from your final stop"
+            // Radius from your last stop (or you): .nearFinal = CLOSE BY ✅, .onTheWay = ON THE WAY ⚠️.
+            case .nearFinal, .onTheWay, .offRoute:
+                let extra = addedMiles.map { " (+\(f($0)) mi extra)" } ?? ""
+                return "\(mark) \(word): ends \(f(dropoffToFinalMi)) mi from \(fromHere ? "you" : "your final stop")\(extra)\(perMile)"
             }
         }
     }
@@ -166,14 +162,13 @@ public struct TripPlanner {
             // No route: is the dropoff close to where you are now?
             guard let origin, let dropoff else { return OnTheWay(verdict: .unknownLocation) }
             let away = Geo.roadMiles(origin, dropoff.location)
-            return OnTheWay(verdict: away <= s.onTheWayRadiusMi ? .nearFinal : .offRoute,
-                            dropoffToFinalMi: away, fromHere: true)
+            return OnTheWay(verdict: Self.dropoffVerdict(away, s), dropoffToFinalMi: away, fromHere: true)
         }
         guard let origin, let dropoff else { return OnTheWay(verdict: .unknownLocation) }
         guard let pickup else {
             // Pickup not found: still say whether it ENDS near your final stop (approximate).
             let toFinal = Geo.roadMiles(dropoff.location, lastStop.location)
-            var r = OnTheWay(verdict: toFinal <= s.onTheWayRadiusMi ? .nearFinal : .offRoute, dropoffToFinalMi: toFinal)
+            var r = OnTheWay(verdict: Self.dropoffVerdict(toFinal, s), dropoffToFinalMi: toFinal)
             r.approximate = true
             return r
         }
@@ -183,10 +178,15 @@ public struct TripPlanner {
         let added = max(ins.addedMiles, 0)
         let toFinal = Geo.roadMiles(dropoff.location, lastStop.location)
         let perMile = added > 0.1 ? pay / added : nil
-        let v: Verdict
-        if toFinal <= s.onTheWayRadiusMi { v = .nearFinal }   // CLOSE BY (checked first)
-        else if added <= s.maxDetourMi { v = .onTheWay }     // ON THE WAY
-        else { v = .offRoute }
-        return OnTheWay(verdict: v, addedMiles: added, dropoffToFinalMi: toFinal, stackedPerMile: perMile, insertion: ins)
+        return OnTheWay(verdict: Self.dropoffVerdict(toFinal, s), addedMiles: added, dropoffToFinalMi: toFinal,
+                        stackedPerMile: perMile, insertion: ins)
+    }
+
+    /// Dropoff radius check: how far the customer is from your last stop (or from you, with no route).
+    /// CLOSE BY ✅ within the Close by radius, ON THE WAY ⚠️ within the On the way radius, else OFF ROUTE ❌.
+    /// Extra miles are still worked out, but only shown as information.
+    public static func dropoffVerdict(_ milesFromTarget: Double, _ s: DriverSettings) -> Verdict {
+        milesFromTarget <= s.dropoffCloseByMi ? .nearFinal
+            : milesFromTarget <= s.dropoffOnTheWayMi ? .onTheWay : .offRoute
     }
 }

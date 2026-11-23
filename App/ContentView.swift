@@ -64,21 +64,21 @@ struct HomeView: View {
                 }
 
                 Section {
-                    numberRow("On the way if fitting the store in adds no more than (mi)", $s.pickupMaxDetourMi)
+                    numberRow("On the way if the store is within (mi) of any pickup in your route", $s.pickupMaxDetourMi)
                     numberRow("Close by if the store is within (mi) of any pickup in your route", $s.pickupNearMi)
                 } header: {
                     Text("Stacking another offer · 🛍 Pickups")
                 } footer: {
-                    Text("CLOSE BY ✅: the store is near a pickup already in your route (or near you when your route has no pickups). ON THE WAY ⚠️: only a small detour. Otherwise OFF ROUTE ❌. With several stores, the banner shows the worst one.")
+                    Text("Radius from the nearest pickup in your route (or from you when your route has no pickups). CLOSE BY ✅ inside the Close by radius, ON THE WAY ⚠️ inside the On the way radius, otherwise OFF ROUTE ❌. With several stores, the banner shows the farthest one. On the way can't be smaller than Close by: changing one moves the other to match.")
                 }
 
                 Section {
-                    numberRow("On the way if it adds no more than (mi)", $s.maxDetourMi)
-                    numberRow("Close by if it ends within (mi) of your final stop", $s.onTheWayRadiusMi)
+                    numberRow("On the way if the customer is within (mi) of your last stop", $s.maxDetourMi)
+                    numberRow("Close by if the customer is within (mi) of your last stop", $s.onTheWayRadiusMi)
                 } header: {
                     Text("Stacking another offer · 🏠 Dropoffs")
                 } footer: {
-                    Text("CLOSE BY ✅: ends near your final stop (or near you when your route is empty). ON THE WAY ⚠️: only a small detour. Otherwise OFF ROUTE ❌.")
+                    Text("Radius from your last stop (or from you when your route is empty). CLOSE BY ✅ inside the Close by radius, ON THE WAY ⚠️ inside the On the way radius, otherwise OFF ROUTE ❌. With several customers, the banner shows the farthest one. On the way can't be smaller than Close by: changing one moves the other to match.")
                 }
 
                 Section {
@@ -121,6 +121,15 @@ struct HomeView: View {
             .onChange(of: s) { _, newValue in
                 SharedStore.shared.settings = newValue
                 Task { await Cloud.shared.schedulePushState() } // so the screen reader uses your targets
+            }
+            // Radii: On the way is never smaller than Close by. Moving one past the other moves the other to match.
+            .onChange(of: s.pickupNearMi) { _, v in if s.pickupMaxDetourMi < v { s.pickupMaxDetourMi = v } }
+            .onChange(of: s.pickupMaxDetourMi) { _, v in if s.pickupNearMi > v { s.pickupNearMi = v } }
+            .onChange(of: s.onTheWayRadiusMi) { _, v in if s.maxDetourMi < v { s.maxDetourMi = v } }
+            .onChange(of: s.maxDetourMi) { _, v in if s.onTheWayRadiusMi > v { s.onTheWayRadiusMi = v } }
+            .onAppear {
+                if s.pickupMaxDetourMi < s.pickupNearMi { s.pickupMaxDetourMi = s.pickupNearMi }
+                if s.maxDetourMi < s.onTheWayRadiusMi { s.maxDetourMi = s.onTheWayRadiusMi }
             }
         }
         .autoReload(today)

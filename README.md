@@ -8,8 +8,8 @@ The app reads gig offers live from your screen through iOS screen broadcasting (
    - **% of your targets** for each (✅ ⚠️ ❌)
    - miles, minutes, and pay **after your cost per mile**
 2. **Checks offers from other apps.** If you already have stops on your route, the banner updates to say whether the new offer is:
-   - ✅ **CLOSE BY**: it ends within your radius of your final stop.
-   - ⚠️ **ON THE WAY**: it adds ≤ your max-detour miles.
+   - ✅ **CLOSE BY**: the customer is within your Close by radius of your last stop.
+   - ⚠️ **ON THE WAY**: the customer is within your On the way radius of your last stop.
    - ❌ **OFF ROUTE**
 
    It also shows **$ per *extra* mile**, the real value of stacking an order.
@@ -34,6 +34,11 @@ by detour, each split 🛍 Pickup / 🏠 Dropoff, in 1-mile steps from 0–1 to 
 Each graded offer now saves its pickup detour (worst store's extra miles) and dropoff detour (extra miles the
 order adds). Run the 5.9 lines at the bottom of `supabase/setup.sql` before installing. Only offers graded on
 5.9 or later have detour numbers.
+
+5.9.6: both route checks are radii from a target. 🛍 store from the nearest pickup in your route, 🏠 customer
+from your last stop (or from you with no route). CLOSE BY ✅ inside the Close by radius, ON THE WAY ⚠️ inside the
+On the way radius, otherwise OFF ROUTE ❌. On the way is never smaller than Close by. Extra miles are shown as
+information only. Insights charts show miles from the target with both radii drawn as dashed lines.
 
 5.9.5: dropoff labels now match pickups: CLOSE BY ✅ is the closer one, ON THE WAY ⚠️ a small detour.
 

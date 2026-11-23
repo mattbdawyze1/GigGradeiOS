@@ -37,10 +37,17 @@ public struct DriverSettings: Codable, Equatable {
     public var perMileFair: Double
     public var perMileGood: Double
     public var costPerMile: Double       // gas + wear, for "after costs" numbers
-    public var onTheWayRadiusMi: Double  // new dropoff within this of your final stop = OK
-    public var maxDetourMi: Double       // extra miles you'll accept to stack an order
-    public var pickupNearMi: Double      // offer's store within this of a pickup in your route = CLOSE BY
-    public var pickupMaxDetourMi: Double // fitting the store in adds no more than this = ON THE WAY (more = OFF ROUTE)
+    // Route checks are radii from a target (5.9.6). Names kept from older versions so saved settings carry over.
+    public var onTheWayRadiusMi: Double  // 🏠 CLOSE BY: customer within this of your last stop
+    public var maxDetourMi: Double       // 🏠 ON THE WAY: customer within this of your last stop
+    public var pickupNearMi: Double      // 🛍 CLOSE BY: store within this of a pickup in your route
+    public var pickupMaxDetourMi: Double // 🛍 ON THE WAY: store within this of a pickup in your route
+
+    /// The radii as the checks use them: ON THE WAY is never smaller than CLOSE BY.
+    public var pickupCloseByMi: Double { pickupNearMi }
+    public var pickupOnTheWayMi: Double { max(pickupMaxDetourMi, pickupNearMi) }
+    public var dropoffCloseByMi: Double { onTheWayRadiusMi }
+    public var dropoffOnTheWayMi: Double { max(maxDetourMi, onTheWayRadiusMi) }
 
     /// The letter grade and "% of target" compare against the upper (good) level.
     public var targetHourly: Double { hourlyGood }
@@ -48,7 +55,7 @@ public struct DriverSettings: Codable, Equatable {
 
     public init(hourlyFair: Double = 18, hourlyGood: Double = 25,
                 perMileFair: Double = 1.0, perMileGood: Double = 1.5,
-                costPerMile: Double = 0.30, onTheWayRadiusMi: Double = 3, maxDetourMi: Double = 2,
+                costPerMile: Double = 0.30, onTheWayRadiusMi: Double = 1.5, maxDetourMi: Double = 3,
                 pickupNearMi: Double = 1.0, pickupMaxDetourMi: Double = 1.5) {
         self.hourlyFair = hourlyFair; self.hourlyGood = hourlyGood
         self.perMileFair = perMileFair; self.perMileGood = perMileGood
@@ -136,8 +143,8 @@ public struct OfferRecord: Codable, Identifiable, Equatable, Hashable {
     public var dropoffLocation: Coord?
     /// True when the dropoff was worked out from the DoorDash map (approximate).
     public var dropoffEstimated: Bool?
-    /// Extra miles to fit the offer's store into your route (worst store for batches), and extra miles the
-    /// whole order adds (dropoff check). For the Insights detour charts.
+    /// Miles from the target, for the Insights charts: the store from the nearest pickup in your route
+    /// (farthest store for batches), and the customer from your last stop (farthest customer for batches).
     public var pickupDetourMi: Double?
     public var dropoffDetourMi: Double?
 

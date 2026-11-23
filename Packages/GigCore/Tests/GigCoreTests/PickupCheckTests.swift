@@ -11,7 +11,7 @@ final class PickupCheckTests: XCTestCase {
     func stop(_ t: StopType, _ name: String, _ at: Coord) -> Stop {
         Stop(type: t, label: name, location: at, orderId: name)
     }
-    let s = DriverSettings(onTheWayRadiusMi: 3, maxDetourMi: 2, pickupNearMi: 1.0, pickupMaxDetourMi: 1.5)
+    let s = DriverSettings(onTheWayRadiusMi: 1.5, maxDetourMi: 3, pickupNearMi: 1.0, pickupMaxDetourMi: 1.5)
 
     func testNearAnyPickupNotJustTheLast() {
         // Route: Chipotle (first), then a far-away dropoff. The offer's store is next to Chipotle.
@@ -25,14 +25,16 @@ final class PickupCheckTests: XCTestCase {
 
     func testCloseByAndOffRoute() {
         let planner = TripPlanner(stops: [stop(.pickup, "A", c(0, 0)), stop(.dropoff, "B", c(4, 0))])
-        // On the way between the two stops, but more than 1 mi from the pickup: a small detour.
-        let close = planner.checkPickups(stores: [(c(2, 0.3), false)], origin: c(-1, 0), settings: s)
+        // ~1.3 road mi from pickup A: past the 1.0 Close by radius, inside the 1.5 On the way radius.
+        let close = planner.checkPickups(stores: [(c(1.0, 0), false)], origin: c(-1, 0), settings: s)
         XCTAssertEqual(close.worst?.level, .close)
-        XCTAssertTrue(close.compact.hasPrefix("🛍 ⚠️ +"))
-        // Far to the side: off route.
-        let off = planner.checkPickups(stores: [(c(2, 6), false)], origin: c(-1, 0), settings: s)
+        XCTAssertEqual(close.compact, "🛍 ⚠️ 1.3 mi from A")
+        // ~2.6 road mi from A, even though it's along the way to B: radius only, so off route.
+        let off = planner.checkPickups(stores: [(c(2, 0), false)], origin: c(-1, 0), settings: s)
         XCTAssertEqual(off.worst?.level, .off)
-        XCTAssertTrue(off.compact.hasPrefix("🛍 ❌ +"))
+        XCTAssertTrue(off.compact.hasPrefix("🛍 ❌ "))
+        XCTAssertTrue(off.compact.hasSuffix("mi from A"))
+        XCTAssertTrue(off.message.contains("mi extra)"), off.message)   // extra miles shown as info
     }
 
     func testNoPickupsInRouteMeasuresFromYou() {
@@ -46,7 +48,7 @@ final class PickupCheckTests: XCTestCase {
         let planner = TripPlanner(stops: [stop(.pickup, "A", c(0, 0)), stop(.dropoff, "B", c(4, 0))])
         let r = planner.checkPickups(stores: [(c(0.1, 0), false), (c(2, 6), true)], unchecked: 1, origin: c(-1, 0), settings: s)
         XCTAssertEqual(r.worst?.level, .off)
-        XCTAssertTrue(r.compact.contains("2 stores, worst ≈+"), r.compact)
+        XCTAssertTrue(r.compact.contains("2 stores, farthest ≈"), r.compact)
         XCTAssertTrue(r.compact.hasSuffix("(+1 not checked)"), r.compact)
     }
 
@@ -59,8 +61,9 @@ final class PickupCheckTests: XCTestCase {
         var near = TripPlanner.OnTheWay(verdict: .nearFinal, addedMiles: 0.5, dropoffToFinalMi: 0.9)
         XCTAssertEqual(near.compact(), "🏠 ✅ ends 0.9 mi from last stop")
         near.approximate = true
-        XCTAssertEqual(near.compact(drops: 2), "🏠 ✅ 2 drops, ≈ends 0.9 mi from last stop")
-        XCTAssertEqual(TripPlanner.OnTheWay(verdict: .onTheWay, addedMiles: 1.2).compact(), "🏠 ⚠️ +1.2 mi")
+        XCTAssertEqual(near.compact(drops: 2), "🏠 ✅ 2 drops, farthest ≈ends 0.9 mi from last stop")
+        XCTAssertEqual(TripPlanner.OnTheWay(verdict: .onTheWay, addedMiles: 1.2, dropoffToFinalMi: 2.4).compact(),
+                       "🏠 ⚠️ ends 2.4 mi from last stop")
         XCTAssertEqual(TripPlanner.OnTheWay(verdict: .unknownLocation).compact(), "🏠 ?")
     }
 
@@ -68,6 +71,19 @@ final class PickupCheckTests: XCTestCase {
         let planner = TripPlanner(stops: [])
         let extra = planner.addedMiles(stores: [c(1, 0), c(2, 0)], customers: [c(3, 0)], origin: c(0, 0))
         XCTAssertEqual(extra, Geo.routeMiles([c(0, 0), c(1, 0), c(2, 0), c(3, 0)]), accuracy: 0.01)
+    }
+
+    func testRadiusRules() {
+        // Dropoffs: radius from your last stop.
+        let s = DriverSettings(onTheWayRadiusMi: 1.5, maxDetourMi: 3)
+        XCTAssertEqual(TripPlanner.dropoffVerdict(1.2, s), .nearFinal)
+        XCTAssertEqual(TripPlanner.dropoffVerdict(2.5, s), .onTheWay)
+        XCTAssertEqual(TripPlanner.dropoffVerdict(3.4, s), .offRoute)
+        // On the way is never smaller than Close by (old saves had Close by 3, On the way 2).
+        let old = DriverSettings(onTheWayRadiusMi: 3, maxDetourMi: 2, pickupNearMi: 2, pickupMaxDetourMi: 1)
+        XCTAssertEqual(old.dropoffOnTheWayMi, 3)
+        XCTAssertEqual(old.pickupOnTheWayMi, 2)
+        XCTAssertEqual(TripPlanner.dropoffVerdict(2.5, old), .nearFinal)
     }
 
     func testSettingsDecodeOldSaves() throws {

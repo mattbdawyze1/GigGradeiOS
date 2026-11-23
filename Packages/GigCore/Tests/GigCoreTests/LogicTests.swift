@@ -68,20 +68,21 @@ final class LogicTests: XCTestCase {
         let planner = TripPlanner(stops: [Stop(type: .dropoff, label: "final", location: Coord(lat: 40.76, lng: -74.0), orderId: "1")])
         let p = Stop(type: .pickup, label: "p", location: Coord(lat: 40.72, lng: -74.001), orderId: "2")
         let d = Stop(type: .dropoff, label: "d", location: Coord(lat: 40.745, lng: -74.002), orderId: "2")
-        // Ends ~1.3 mi from the final stop -> CLOSE BY (radius 3)
-        let good = planner.checkOnTheWay(origin: origin, pickup: p, dropoff: d, pay: 8, settings: DriverSettings(maxDetourMi: 1))
+        // Ends ~1.3 mi from the final stop -> CLOSE BY (Close by radius 2)
+        let good = planner.checkOnTheWay(origin: origin, pickup: p, dropoff: d, pay: 8,
+                                         settings: DriverSettings(onTheWayRadiusMi: 2, maxDetourMi: 4))
         XCTAssertEqual(good.verdict, .nearFinal)
         XCTAssertTrue(good.message.hasPrefix("✅ CLOSE BY"))
-        // Same order with a tiny radius: it's still only a small detour -> ON THE WAY
+        // Same order with a tiny Close by radius: inside the On the way radius -> ON THE WAY
         let detour = planner.checkOnTheWay(origin: origin, pickup: p, dropoff: d, pay: 8,
-                                           settings: DriverSettings(onTheWayRadiusMi: 0.5, maxDetourMi: 1))
+                                           settings: DriverSettings(onTheWayRadiusMi: 0.5, maxDetourMi: 2))
         XCTAssertEqual(detour.verdict, .onTheWay)
         XCTAssertTrue(detour.message.hasPrefix("⚠️ ON THE WAY"))
         XCTAssertEqual(good.insertion?.order.count, 3)
 
         let far = Stop(type: .dropoff, label: "far", location: Coord(lat: 40.60, lng: -74.0), orderId: "3")
         let bad = planner.checkOnTheWay(origin: origin, pickup: p, dropoff: far, pay: 8,
-                                        settings: DriverSettings(onTheWayRadiusMi: 3, maxDetourMi: 1))
+                                        settings: DriverSettings(onTheWayRadiusMi: 3, maxDetourMi: 4))
         XCTAssertEqual(bad.verdict, .offRoute)
     }
 

@@ -464,16 +464,16 @@ final class OfferPipeline {
         let storesToCheck = info?.stores ?? fallback
         let pickupCheck = planner.checkPickups(stores: storesToCheck, unchecked: info?.unchecked ?? 0,
                                                origin: origin, settings: settings)
-        // Batch offers (2+ stores or customers): the extra miles cover all of the offer's stops.
+        // Batch offers (2+ stores or customers): judged by the customer farthest from your last stop;
+        // the extra miles (information only) cover all of the offer's stops.
         var drops = 1
         if let info, let d, let origin, let last = planner.stops.last,
            info.stores.count > 1 || info.customers.count > 1 {
             drops = max(info.customers.count, 1)
             let customers = info.customers.count > 1 ? info.customers : [d.location]
             let added = planner.addedMiles(stores: info.stores.map { $0.coord }, customers: customers, origin: origin)
-            let toFinal = Geo.roadMiles(d.location, last.location)
-            let v: TripPlanner.Verdict = toFinal <= settings.onTheWayRadiusMi ? .nearFinal
-                : added <= settings.maxDetourMi ? .onTheWay : .offRoute
+            let toFinal = customers.map { Geo.roadMiles($0, last.location) }.max() ?? Geo.roadMiles(d.location, last.location)
+            let v = TripPlanner.dropoffVerdict(toFinal, settings)
             let wasApproximate = otw.approximate
             otw = TripPlanner.OnTheWay(verdict: v, addedMiles: added, dropoffToFinalMi: toFinal,
                                        stackedPerMile: added > 0.1 ? offer.pay / added : nil)
@@ -481,10 +481,11 @@ final class OfferPipeline {
         }
         let note = otw.message
         let fullNote = pickupCheck.message + "\n" + otw.message
-        let pickupDetour = pickupCheck.worst?.detourMi, dropoffDetour = otw.addedMiles
+        // For the Insights charts: miles from the target (store → nearest route pickup, customer → last stop).
+        let pickupDetour = pickupCheck.worst?.nearestMi, dropoffDetour = otw.dropoffToFinalMi
         log.update(id: saved.id, dayKey: dayKey) {
             $0.routeNote = fullNote
-            $0.pickupDetourMi = pickupDetour     // for the Insights detour charts
+            $0.pickupDetourMi = pickupDetour
             $0.dropoffDetourMi = dropoffDetour
         }
         var canAdd = false
