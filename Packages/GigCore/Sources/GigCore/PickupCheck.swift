@@ -77,10 +77,10 @@ extension TripPlanner {
             // Closest pickup in the route (or you).
             var nearest: (mi: Double, name: String?)?
             for p in routePickups {
-                let d = Geo.roadMiles(store.coord, p.location)
+                let d = Geo.radiusMiles(store.coord, p.location)
                 if nearest == nil || d < nearest!.mi { nearest = (d, p.label) }
             }
-            if nearest == nil, let origin { nearest = (Geo.roadMiles(store.coord, origin), nil) }
+            if nearest == nil, let origin { nearest = (Geo.radiusMiles(store.coord, origin), nil) }
             let detour = Self.cheapestDetour(store.coord, path: path)
             let level: PickupCheck.Level
             if let n = nearest, n.mi <= s.pickupCloseByMi { level = .near }

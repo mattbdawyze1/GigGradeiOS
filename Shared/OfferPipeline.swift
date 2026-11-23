@@ -36,6 +36,7 @@ final class OfferPipeline {
         var unchecked: Int
     }
     private var batches: [String: Batch] = [:]
+    private var trails: [String: Trail] = [:]
     private func batch(_ key: String) -> Batch? { lock.lock(); defer { lock.unlock() }; return batches[key] }
 
     /// Last time an offer (readable or not) was on screen. 👓 ends its reading when an offer shows up after the press.
@@ -152,10 +153,14 @@ final class OfferPipeline {
         // ONE banner per offer: wait for the on-the-way check, but never more than 3.5 s.
         // DoorDash: the banner goes out right away, and the route check waits until you tap the customer pin.
         let saved = record
+        startTrail(key: key, record: saved, text: text)
         let gate = PostOnce()
         let holdVerdict = offer.app == .doordash
         DispatchQueue.global().asyncAfter(deadline: .now() + (holdVerdict ? 0 : 3.5)) { [weak self] in
             guard let self, self.currentKey == key, gate.claim() else { return }
+            if !holdVerdict {
+                self.noteIssue(key, .noVerdictInTime, "the route check wasn't done after 3.5 s, so the banner went out without it")
+            }
             OfferAlert.post(record: saved, offer: offer, score: score, settings: settings, prefs: prefs,
                             otw: nil, canAddToRoute: false, silent: false,
                             hint: holdVerdict ? OfferAlert.tapPinHint : nil)
@@ -183,6 +188,18 @@ final class OfferPipeline {
             }
             var batch = Batch(stores: knownStores.map { (coord: $0, estimated: false) }, customers: [], unchecked: 0)
 
+            if offer.app == .uber || offer.app == .doordash {
+                var missing: [String] = []
+                if pins == nil { missing = ["no pins found"] } else if let pins {
+                    if pins.me == nil { missing.append(offer.app == .uber ? "your arrow" : "your blue dot") }
+                    if pins.stores.isEmpty { missing.append("store pin") }
+                    if pins.customers.isEmpty { missing.append("customer pin") }
+                }
+                if !missing.isEmpty {
+                    self.noteIssue(key, .mapUnreadable, "missing " + missing.joined(separator: ", ") + " on the offer map")
+                }
+            }
+            let pickupFromText = pickupCoord != nil
             if let pins {
                 await Cloud.shared.pullSettingsIntoStore(force: true) // freshest GPS: the map's arrow/dot is "now"
                 // Every pin: the card's stores confirm the map; stores and customers not on the card are
@@ -197,6 +214,11 @@ final class OfferPipeline {
                        let est = MapLocator.locate(pins: pins, me: me, store: pc, statedMiles: offer.miles) {
                         // Use the map when there's no dropoff address, or when the address lookup landed
                         // far from where the map's pin actually is (wrong match).
+                        if let dc = dropoffCoord, Geo.straightMiles(dc, est.finalDropoff) > 1.0 {
+                            self.noteIssue(key, .textMapDisagree, String(format:
+                                "Apple Maps put the customer (“%@”) %.1f mi from the map's customer pin; used the pin",
+                                offer.dropoffText ?? "?", Geo.straightMiles(dc, est.finalDropoff)))
+                        }
                         if dropoffCoord == nil || Geo.straightMiles(dropoffCoord!, est.finalDropoff) > 1.0 {
                             dropoffCoord = est.finalDropoff
                             estimated = true
@@ -211,6 +233,16 @@ final class OfferPipeline {
                    let s = await self.streetEstimate(lines: lines, pins: pins, pickup: pickupCoord, offer: offer) {
                     dropoffCoord = s.coord; estimated = true; streets = s.names
                 }
+            }
+
+            if !pickupFromText {
+                self.noteIssue(key, .storeNotFound, pickupCoord == nil
+                    ? "Apple Maps couldn't find “\(offer.pickupText ?? "no store text")”, and the map couldn't place it"
+                    : "Apple Maps couldn't find “\(offer.pickupText ?? "no store text")”; placed from the store pin (≈)")
+            }
+            if dropoffCoord == nil, offer.app != .doordash { // DoorDash: the customer comes from your tap
+                self.noteIssue(key, .customerNotFound,
+                               "couldn't place the customer from “\(offer.dropoffText ?? "no customer text")” or the map")
             }
 
             // Stores the card or the map showed that couldn't be placed (e.g. pins stacked on top of each other).
@@ -297,6 +329,7 @@ final class OfferPipeline {
                 }
             }
             if ambiguous {
+                noteIssue(key, .multipleMatches, "tapped “\(popup?.text ?? "?")”: several places match and nothing on screen told them apart")
                 // Several places match and nothing on screen tells them apart: ask for a zoom + tap (once).
                 if !r.ambiguous, currentKey == key {
                     OfferAlert.post(record: r.saved, offer: r.offer, score: r.score, settings: r.settings, prefs: r.prefs,
@@ -472,7 +505,7 @@ final class OfferPipeline {
             drops = max(info.customers.count, 1)
             let customers = info.customers.count > 1 ? info.customers : [d.location]
             let added = planner.addedMiles(stores: info.stores.map { $0.coord }, customers: customers, origin: origin)
-            let toFinal = customers.map { Geo.roadMiles($0, last.location) }.max() ?? Geo.roadMiles(d.location, last.location)
+            let toFinal = customers.map { Geo.radiusMiles($0, last.location) }.max() ?? Geo.radiusMiles(d.location, last.location)
             let v = TripPlanner.dropoffVerdict(toFinal, settings)
             let wasApproximate = otw.approximate
             otw = TripPlanner.OnTheWay(verdict: v, addedMiles: added, dropoffToFinalMi: toFinal,
@@ -530,8 +563,83 @@ final class OfferPipeline {
             OfferAlert.post(record: saved, offer: offer, score: score, settings: settings, prefs: prefs,
                             otw: otw, canAddToRoute: canAdd, silent: false, dropoff: dropoffInfo,
                             pickupCheck: pickupCheck, drops: drops)
+            let source = d == nil ? "not found" : dropoffLabel != nil ? "tapped address" : estimated ? "map pin" : "card text"
+            notePosted(key, marks: "\(pickupCheck.worst?.level.rawValue ?? -1)|\(otw.verdict)",
+                       summary: [pickupCheck.compact, otw.compact(drops: drops)].filter { !$0.isEmpty }.joined(separator: " · "),
+                       pickup: p?.location, dropoff: d?.location, source: source)
         }
         return (d != nil, note)
+    }
+
+    // MARK: Issues log (5.9.6.2): anything that went wrong on a read offer, one entry per offer, kept up to date
+
+    enum IssueKind: String {
+        case verdictChanged, textMapDisagree, storeNotFound, customerNotFound, mapUnreadable, multipleMatches, noVerdictInTime
+        var title: String {
+            switch self {
+            case .verdictChanged: return "Verdict changed after the banner"
+            case .textMapDisagree: return "Text and map disagreed"
+            case .storeNotFound: return "Couldn't find the store"
+            case .customerNotFound: return "Couldn't find the customer"
+            case .mapUnreadable: return "Map couldn't be read"
+            case .multipleMatches: return "Several matches for the tapped address"
+            case .noVerdictInTime: return "Banner went out without a verdict"
+            }
+        }
+    }
+
+    private struct Trail {
+        let id = UUID()
+        let record: OfferRecord
+        let text: String
+        var events: [String] = []
+        var kinds: [IssueKind] = []
+        var lastPosted: (marks: String, summary: String, pickup: Coord?, dropoff: Coord?, source: String)?
+    }
+
+    private func startTrail(key: String, record: OfferRecord, text: String) {
+        lock.lock(); trails = [key: Trail(record: record, text: text)]; lock.unlock()
+    }
+
+    /// Adds a line to the offer's issue entry and uploads the entry (same row each time, so one per offer).
+    func noteIssue(_ key: String, _ kind: IssueKind, _ detail: String) {
+        lock.lock()
+        guard var t = trails[key] else { lock.unlock(); return }
+        let secs = Date().timeIntervalSince(t.record.date)
+        t.events.append(String(format: "+%.1f s  ", secs) + kind.title + ": " + detail)
+        if !t.kinds.contains(kind) { t.kinds.append(kind) }
+        trails[key] = t
+        lock.unlock()
+        let headline = t.kinds.map(\.title).joined(separator: " · ")
+        let details = t.events.joined(separator: "\n")
+        Task {
+            await Cloud.shared.reportIssue(id: t.id, offerId: t.record.id, date: t.record.date, headline: headline,
+                                           details: details, text: t.text, screenshotFile: t.record.screenshotFile)
+        }
+    }
+
+    /// Remembers what each verdict banner said; a later banner with a different verdict is logged with what moved.
+    private func notePosted(_ key: String, marks: String, summary: String, pickup: Coord?, dropoff: Coord?, source: String) {
+        lock.lock()
+        guard var t = trails[key] else { lock.unlock(); return }
+        let before = t.lastPosted
+        t.lastPosted = (marks: marks, summary: summary, pickup: pickup, dropoff: dropoff, source: source)
+        trails[key] = t
+        lock.unlock()
+        guard let before, before.marks != marks else { return }
+        func moved(_ a: Coord?, _ b: Coord?) -> String? {
+            guard let a, let b else { return nil }
+            let d = Geo.straightMiles(a, b)
+            return d >= 0.1 ? String(format: "%.1f mi", d) : nil
+        }
+        var parts = ["banner said \(before.summary); now \(summary)"]
+        if let m = moved(before.pickup, pickup) { parts.append("store moved \(m)") }
+        if let m = moved(before.dropoff, dropoff) {
+            parts.append("customer moved \(m) (\(before.source) → \(source))")
+        } else if before.source != source {
+            parts.append("customer: \(before.source) → \(source)")
+        }
+        noteIssue(key, .verdictChanged, parts.joined(separator: "; "))
     }
 }
 

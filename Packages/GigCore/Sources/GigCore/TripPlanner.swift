@@ -14,6 +14,10 @@ public enum Geo {
 
     public static func roadMiles(_ a: Coord, _ b: Coord) -> Double { straightMiles(a, b) * roadFactor }
 
+    /// Distance for the Close by / On the way radius checks: straight-line, so a 1.0 mi radius is a true
+    /// 1-mile circle on the map (5.9.6.1). Extra miles and route miles still use `roadMiles`.
+    public static func radiusMiles(_ a: Coord, _ b: Coord) -> Double { straightMiles(a, b) }
+
     public static func routeMiles(_ pts: [Coord]) -> Double {
         guard pts.count > 1 else { return 0 }
         return zip(pts, pts.dropFirst()).reduce(0) { $0 + roadMiles($1.0, $1.1) }
@@ -161,13 +165,13 @@ public struct TripPlanner {
         guard let lastStop = stops.last else {
             // No route: is the dropoff close to where you are now?
             guard let origin, let dropoff else { return OnTheWay(verdict: .unknownLocation) }
-            let away = Geo.roadMiles(origin, dropoff.location)
+            let away = Geo.radiusMiles(origin, dropoff.location)
             return OnTheWay(verdict: Self.dropoffVerdict(away, s), dropoffToFinalMi: away, fromHere: true)
         }
         guard let origin, let dropoff else { return OnTheWay(verdict: .unknownLocation) }
         guard let pickup else {
             // Pickup not found: still say whether it ENDS near your final stop (approximate).
-            let toFinal = Geo.roadMiles(dropoff.location, lastStop.location)
+            let toFinal = Geo.radiusMiles(dropoff.location, lastStop.location)
             var r = OnTheWay(verdict: Self.dropoffVerdict(toFinal, s), dropoffToFinalMi: toFinal)
             r.approximate = true
             return r
@@ -176,7 +180,7 @@ public struct TripPlanner {
             return OnTheWay(verdict: .tooManyStops)
         }
         let added = max(ins.addedMiles, 0)
-        let toFinal = Geo.roadMiles(dropoff.location, lastStop.location)
+        let toFinal = Geo.radiusMiles(dropoff.location, lastStop.location)
         let perMile = added > 0.1 ? pay / added : nil
         return OnTheWay(verdict: Self.dropoffVerdict(toFinal, s), addedMiles: added, dropoffToFinalMi: toFinal,
                         stackedPerMile: perMile, insertion: ins)

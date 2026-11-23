@@ -25,11 +25,14 @@ final class PickupCheckTests: XCTestCase {
 
     func testCloseByAndOffRoute() {
         let planner = TripPlanner(stops: [stop(.pickup, "A", c(0, 0)), stop(.dropoff, "B", c(4, 0))])
-        // ~1.3 road mi from pickup A: past the 1.0 Close by radius, inside the 1.5 On the way radius.
-        let close = planner.checkPickups(stores: [(c(1.0, 0), false)], origin: c(-1, 0), settings: s)
+        // 1.2 mi (straight line) from pickup A: past the 1.0 Close by radius, inside the 1.5 On the way radius.
+        let close = planner.checkPickups(stores: [(c(1.2, 0), false)], origin: c(-1, 0), settings: s)
         XCTAssertEqual(close.worst?.level, .close)
-        XCTAssertEqual(close.compact, "🛍 ⚠️ 1.3 mi from A")
-        // ~2.6 road mi from A, even though it's along the way to B: radius only, so off route.
+        XCTAssertEqual(close.compact, "🛍 ⚠️ 1.2 mi from A")
+        // A true 1.0 mi circle: 1.0 mi away is Close by (it was 1.3 "road" mi before 5.9.6.1).
+        let edge = planner.checkPickups(stores: [(c(0.99, 0), false)], origin: c(-1, 0), settings: s)
+        XCTAssertEqual(edge.worst?.level, .near)
+        // 2.0 mi from A, even though it's along the way to B: radius only, so off route.
         let off = planner.checkPickups(stores: [(c(2, 0), false)], origin: c(-1, 0), settings: s)
         XCTAssertEqual(off.worst?.level, .off)
         XCTAssertTrue(off.compact.hasPrefix("🛍 ❌ "))

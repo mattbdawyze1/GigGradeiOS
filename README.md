@@ -35,6 +35,17 @@ Each graded offer now saves its pickup detour (worst store's extra miles) and dr
 order adds). Run the 5.9 lines at the bottom of `supabase/setup.sql` before installing. Only offers graded on
 5.9 or later have detour numbers.
 
+5.9.6.2 (version 5.9.6, build 3): the Missed button in Offers is now **Issues**. Besides offers that couldn't be
+read, it logs read offers where something went wrong, one entry per offer with a timeline: a verdict that changed
+after the banner (and what moved), Apple Maps and the map's pin more than 1 mi apart, a store or customer that
+couldn't be found, a map that couldn't be read, a DoorDash tap with several matches, or a banner that went out
+without a verdict. Each entry shows your decision (✓ / ✕ / skipped) and the offer's screenshot; a switch shows
+declined/skipped only. Run the 5.9.6.2 SQL at the bottom of supabase/setup.sql first.
+
+5.9.6.1 (version 5.9.6, build 2): the Close by / On the way radius checks use straight-line miles, so a 1.0 mi radius is a true 1-mile
+circle on the map (before, distances were road estimates = straight line × 1.3). Extra miles in the trip notes are
+still road estimates (× 1.3).
+
 5.9.6: both route checks are radii from a target. 🛍 store from the nearest pickup in your route, 🏠 customer
 from your last stop (or from you with no route). CLOSE BY ✅ inside the Close by radius, ON THE WAY ⚠️ inside the
 On the way radius, otherwise OFF ROUTE ❌. On the way is never smaller than Close by. Extra miles are shown as

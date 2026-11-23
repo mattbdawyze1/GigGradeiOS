@@ -54,7 +54,7 @@ struct OffersView: View {
                     NavigationLink {
                         MissedOffersView()
                     } label: {
-                        Label("Missed", systemImage: "exclamationmark.bubble")
+                        Label("Issues", systemImage: "exclamationmark.triangle")
                             .labelStyle(.titleAndIcon)
                             .font(.subheadline)
                     }

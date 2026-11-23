@@ -68,3 +68,10 @@ alter table public.offers
   add column if not exists pickup_detour_mi double precision,
   add column if not exists dropoff_detour_mi double precision;
 notify pgrst, 'reload schema';
+
+-- Version 5.9.6.2: the Issues log (problems on read offers) shares the missed_offers table
+alter table public.missed_offers
+  add column if not exists kind text,
+  add column if not exists offer_id uuid,
+  add column if not exists details text;
+notify pgrst, 'reload schema';

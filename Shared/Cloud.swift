@@ -405,6 +405,41 @@ actor Cloud {
         var reason: String
         var ocr_text: String
         var screenshot_path: String?
+        var kind: String? = nil        // nil = missed offer, "issue" = a read offer where something went wrong
+        var offer_id: UUID? = nil
+        var details: String? = nil
+        var isIssue: Bool { kind == "issue" }
+    }
+
+    /// One entry per read offer where something went wrong, rewritten as more happens (5.9.6.2).
+    /// The screenshot is the offer's own (screenshots/offers/...), uploaded with the offer.
+    func reportIssue(id: UUID, offerId: UUID, date: Date, headline: String, details: String, text: String,
+                     screenshotFile: String?) async {
+        guard Self.isConfigured else { return }
+        let row = MissedRow(id: id, date: date, reason: headline, ocr_text: String(text.prefix(4000)),
+                            screenshot_path: screenshotFile.map { "\(Self.folder)/\($0)" },
+                            kind: "issue", offer_id: offerId, details: details)
+        _ = try? await send("POST", "/rest/v1/missed_offers", query: [URLQueryItem(name: "on_conflict", value: "id")],
+                            body: try Self.encoder.encode([row]),
+                            headers: ["Prefer": "resolution=merge-duplicates,return=minimal"])
+    }
+
+    struct OfferBrief: Decodable {
+        let id: UUID
+        let app: String
+        let pay: Double
+        let decision: String?
+    }
+
+    /// App, pay and your decision for the offers behind issue entries.
+    func offerBriefs(_ ids: [UUID]) async -> [UUID: OfferBrief] {
+        guard Self.isConfigured, !ids.isEmpty,
+              let data = try? await send("GET", "/rest/v1/offers", query: [
+                URLQueryItem(name: "select", value: "id,app,pay,decision"),
+                URLQueryItem(name: "id", value: "in.(" + ids.map(\.uuidString).joined(separator: ",") + ")"),
+              ]),
+              let rows = try? Self.decoder.decode([OfferBrief].self, from: data) else { return [:] }
+        return Dictionary(rows.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
     }
 
     /// Best effort: if there's no signal, the note is simply dropped (it's only for diagnosis).
@@ -423,7 +458,7 @@ actor Cloud {
     }
 
     /// Returns the rows, or the exact reason they couldn't be loaded (shown on screen for diagnosis).
-    func missedOffersResult(limit: Int = 50) async -> Result<[MissedRow], CloudError> {
+    func missedOffersResult(limit: Int = 200) async -> Result<[MissedRow], CloudError> {
         guard Self.isConfigured else {
             return .failure(CloudError(message: "Cloud sync isn't set up in this build. The Supabase variables weren't added in Codemagic (check the supabase group is attached)."))
         }
@@ -453,7 +488,8 @@ actor Cloud {
 
     func deleteMissed(_ row: MissedRow) async {
         _ = try? await send("DELETE", "/rest/v1/missed_offers", query: [URLQueryItem(name: "id", value: "eq.\(row.id.uuidString)")])
-        if let p = row.screenshot_path { _ = try? await send("DELETE", "/storage/v1/object/screenshots/\(p)") }
+        // An issue entry shows the offer's own screenshot: keep it (it belongs to the offer).
+        if let p = row.screenshot_path, !row.isIssue { _ = try? await send("DELETE", "/storage/v1/object/screenshots/\(p)") }
     }
 
     func missedScreenshot(_ path: String) async -> Data? {
