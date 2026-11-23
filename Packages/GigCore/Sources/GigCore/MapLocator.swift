@@ -106,6 +106,36 @@ public enum MapLocator {
         return t.range(of: #"(^|[\s,])\d{1,6}[A-Za-z]?\s+[A-Za-z]"#, options: .regularExpression) == nil
     }
 
+    /// True for a cross-street location: "Main St & Oak Ave, Smithtown".
+    public static func isCrossStreet(_ text: String?) -> Bool {
+        guard let t = text else { return false }
+        let streets = (t.split(separator: ",").first.map(String.init) ?? t).components(separatedBy: "&")
+        return streets.count == 2 && streets.allSatisfy { $0.trimmingCharacters(in: .whitespaces).count >= 2 }
+    }
+
+    /// Uber, store name only: the store and customer straight from their pins. Uber's offer map is north-up, and
+    /// its scale comes from the card's total miles: you → store → customer on screen (in pixels) is that trip,
+    /// with straight lines × `Geo.roadFactor` standing in for the roads. Only your GPS position is needed.
+    public static func placeByMiles(pins: MapPins, me: Coord, statedMiles: Double?) -> (store: Coord, customers: [Coord])? {
+        guard let meP = pins.me, let storeP = pins.stores.first, !pins.customers.isEmpty,
+              let miles = statedMiles, miles > 0 else { return nil }
+        func dist(_ a: MapPins.Point, _ b: MapPins.Point) -> Double { ((a.x - b.x) * (a.x - b.x) + (a.y - b.y) * (a.y - b.y)).squareRoot() }
+        // Customers in trip order: nearest to the store first.
+        let customersP = pins.customers.sorted { dist(storeP, $0) < dist(storeP, $1) }
+        var pixels = dist(meP, storeP)
+        var last = storeP
+        for c in customersP { pixels += dist(last, c); last = c }
+        guard pixels >= 40 else { return nil }                       // too small on screen to measure
+        let groundMetersPerPixel = miles * 1609.344 / Geo.roadFactor / pixels
+        guard groundMetersPerPixel > 0.3, groundMetersPerPixel < 250 else { return nil }
+        let mercPerPixel = groundMetersPerPixel / cos(me.lat * .pi / 180)
+        let w0 = project(me)
+        func place(_ p: MapPins.Point) -> Coord {
+            unproject(w0.x + (p.x - meP.x) * mercPerPixel, w0.y - (p.y - meP.y) * mercPerPixel)
+        }
+        return (place(storeP), customersP.map(place))
+    }
+
     /// Uber, store name only: of every location with that name, pick the one that fits the store pin on the map.
     /// Each candidate is lined up with the store pin (your blue dot is the other reference). A wrong branch puts
     /// the map at the wrong angle or scale, or the trip doesn't match the offer's miles, or the customer pin lands

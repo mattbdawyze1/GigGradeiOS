@@ -17,6 +17,17 @@ enum PlaceFinder {
         return parts.isEmpty ? p.name : parts.joined(separator: ", ")
     }
 
+    /// The corner itself for cross streets ("Main St & Oak Ave, Smithtown"): the text as written, then with
+    /// "and" / "at". Unlike `find`, never falls back to just one of the streets.
+    static func corner(_ query: String?, near: Coord?) async -> Coord? {
+        guard let query = query?.trimmingCharacters(in: .whitespaces), query.contains("&") else { return nil }
+        for attempt in [query, query.replacingOccurrences(of: "&", with: "and"), query.replacingOccurrences(of: "&", with: "at")] {
+            if let c = await search(attempt, near: near) { return c }
+            if let c = await geocode(attempt, near: near) { return c }
+        }
+        return nil
+    }
+
     /// The town at the end of "Partridge Ln & Pheasant Ln, East Setauket" -> "East Setauket".
     static func town(in text: String?) -> String? {
         guard let text, let last = text.split(separator: ",").last, text.contains(",") else { return nil }
