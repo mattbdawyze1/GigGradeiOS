@@ -5,14 +5,14 @@ final class BannerLayoutTests: XCTestCase {
     let values: [BannerItem: String] = [
         .color: "🟡 Fair", .grade: "C", .app: "Uber", .pay: "$10.06",
         .hourly: "$18.29/hr⚠️", .perMile: "$1.12/mi⚠️", .miles: "9.0 mi", .minutes: "33 min",
-        .net: "net $7.36", .verdict: "✅ ON THE WAY · ends 1.3 mi from last stop",
+        .net: "net $7.36", .verdict: "✅ CLOSE BY · ends 1.3 mi from last stop",
     ]
 
     func testStandardLayoutPutsVerdictOnLine3() {
         let t = BannerLayout.standard.compose(values)
         XCTAssertEqual(t.title, "🟡 Fair · C · Uber · $10.06")
         XCTAssertEqual(t.subtitle, "$18.29/hr⚠️ · $1.12/mi⚠️")
-        XCTAssertEqual(t.body, "✅ ON THE WAY · ends 1.3 mi from last stop\n9.0 mi · 33 min · net $7.36")
+        XCTAssertEqual(t.body, "✅ CLOSE BY · ends 1.3 mi from last stop\n9.0 mi · 33 min · net $7.36")
     }
 
     func testCustomLinesAndOrder() {
@@ -24,7 +24,7 @@ final class BannerLayoutTests: XCTestCase {
         let t = l.compose(values)
         XCTAssertEqual(t.title, "$10.06 · $18.29/hr⚠️ · 🟡 Fair · Uber")
         XCTAssertEqual(t.subtitle, "$1.12/mi⚠️")
-        XCTAssertEqual(t.body, "✅ ON THE WAY · ends 1.3 mi from last stop\n9.0 mi · 33 min\nnet $7.36")
+        XCTAssertEqual(t.body, "✅ CLOSE BY · ends 1.3 mi from last stop\n9.0 mi · 33 min\nnet $7.36")
     }
 
     func testMissingValuesAreSkippedAndTitleNeverEmpty() {
@@ -51,9 +51,9 @@ final class BannerLayoutTests: XCTestCase {
     }
 
     func testShortVerdicts() {
-        XCTAssertEqual(TripPlanner.OnTheWay(verdict: .onTheWay, addedMiles: 0.8).shortMessage, "✅ CLOSE BY · only +0.8 mi")
+        XCTAssertEqual(TripPlanner.OnTheWay(verdict: .onTheWay, addedMiles: 0.8).shortMessage, "⚠️ ON THE WAY · only +0.8 mi")
         XCTAssertEqual(TripPlanner.OnTheWay(verdict: .nearFinal, dropoffToFinalMi: 1.2, fromHere: true).shortMessage,
-                       "✅ ON THE WAY · ends 1.2 mi from you")
+                       "✅ CLOSE BY · ends 1.2 mi from you")
         XCTAssertEqual(TripPlanner.OnTheWay(verdict: .offRoute, addedMiles: 5.6, dropoffToFinalMi: 7.2).shortMessage,
                        "❌ OFF ROUTE · +5.6 mi extra")
     }

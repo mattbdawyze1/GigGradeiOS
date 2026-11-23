@@ -64,8 +64,8 @@ struct HomeView: View {
                 }
 
                 Section {
-                    numberRow("Close by if the store is within (mi) of any pickup in your route", $s.pickupNearMi)
                     numberRow("On the way if fitting the store in adds no more than (mi)", $s.pickupMaxDetourMi)
+                    numberRow("Close by if the store is within (mi) of any pickup in your route", $s.pickupNearMi)
                 } header: {
                     Text("Stacking another offer · 🛍 Pickups")
                 } footer: {
@@ -73,12 +73,12 @@ struct HomeView: View {
                 }
 
                 Section {
-                    numberRow("On the way if it ends within (mi) of your final stop", $s.onTheWayRadiusMi)
-                    numberRow("Close by if it adds no more than (mi)", $s.maxDetourMi)
+                    numberRow("On the way if it adds no more than (mi)", $s.maxDetourMi)
+                    numberRow("Close by if it ends within (mi) of your final stop", $s.onTheWayRadiusMi)
                 } header: {
                     Text("Stacking another offer · 🏠 Dropoffs")
                 } footer: {
-                    Text("ON THE WAY: ends near your final stop (or near you when your route is empty). CLOSE BY: only a small detour. Otherwise OFF ROUTE.")
+                    Text("CLOSE BY ✅: ends near your final stop (or near you when your route is empty). ON THE WAY ⚠️: only a small detour. Otherwise OFF ROUTE ❌.")
                 }
 
                 Section {

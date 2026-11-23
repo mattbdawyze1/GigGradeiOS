@@ -61,7 +61,7 @@ final class UberV47Tests: XCTestCase {
         let r = planner.checkOnTheWay(origin: l, pickup: nil, dropoff: near, pay: 6, settings: DriverSettings(onTheWayRadiusMi: 3))
         XCTAssertEqual(r.verdict, .nearFinal)
         XCTAssertTrue(r.approximate)
-        XCTAssertEqual(r.shortMessage, "≈ ✅ ON THE WAY · ends 0.4 mi from last stop")
+        XCTAssertEqual(r.shortMessage, "≈ ✅ CLOSE BY · ends 0.4 mi from last stop")
         let far = Stop(type: .dropoff, label: "d", location: Coord(lat: 40.80, lng: -73.20), orderId: "2")
         let r2 = planner.checkOnTheWay(origin: l, pickup: nil, dropoff: far, pay: 6, settings: DriverSettings(onTheWayRadiusMi: 3))
         XCTAssertTrue(r2.shortMessage.hasPrefix("≈ ❌ OFF ROUTE · ends"))

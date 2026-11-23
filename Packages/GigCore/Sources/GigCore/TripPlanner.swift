@@ -133,9 +133,9 @@ public struct TripPlanner {
             case .noActiveTrip: return ""
             case .unknownLocation: return "Route check: couldn't locate"
             case .tooManyStops: return "Route full (\(TripPlanner.maxStops) stops)"
-            case .nearFinal where fromHere: return "✅ ON THE WAY · ends \(f(dropoffToFinalMi)) mi from you"
-            case .nearFinal: return "✅ ON THE WAY · ends \(f(dropoffToFinalMi)) mi from last stop"
-            case .onTheWay: return "✅ CLOSE BY · only +\(f(addedMiles)) mi"
+            case .nearFinal where fromHere: return "✅ CLOSE BY · ends \(f(dropoffToFinalMi)) mi from you"
+            case .nearFinal: return "✅ CLOSE BY · ends \(f(dropoffToFinalMi)) mi from last stop"
+            case .onTheWay: return "⚠️ ON THE WAY · only +\(f(addedMiles)) mi"
             case .offRoute where fromHere: return "❌ OFF ROUTE · ends \(f(dropoffToFinalMi)) mi from you"
             case .offRoute where addedMiles == nil: return "❌ OFF ROUTE · ends \(f(dropoffToFinalMi)) mi from last stop"
             case .offRoute: return "❌ OFF ROUTE · +\(f(addedMiles)) mi extra"
@@ -149,11 +149,11 @@ public struct TripPlanner {
             case .noActiveTrip: return "No active route — graded on its own."
             case .unknownLocation: return "Couldn't locate pickup/dropoff — on-the-way check skipped."
             case .tooManyStops: return "Route already has \(TripPlanner.maxStops) stops — finish one first."
-            // .nearFinal = ends near your final stop (or near you) -> ON THE WAY
-            // .onTheWay  = only a small detour                      -> CLOSE BY
-            case .nearFinal where fromHere: return "✅ ON THE WAY: ends \(f(dropoffToFinalMi)) mi from you"
-            case .nearFinal: return "✅ ON THE WAY: ends \(f(dropoffToFinalMi)) mi from your final stop (+\(f(addedMiles)) mi)\(perMile)"
-            case .onTheWay: return "✅ CLOSE BY: only +\(f(addedMiles)) mi extra\(perMile)"
+            // .nearFinal = ends near your final stop (or near you) -> CLOSE BY ✅
+            // .onTheWay  = only a small detour                      -> ON THE WAY ⚠️
+            case .nearFinal where fromHere: return "✅ CLOSE BY: ends \(f(dropoffToFinalMi)) mi from you"
+            case .nearFinal: return "✅ CLOSE BY: ends \(f(dropoffToFinalMi)) mi from your final stop (+\(f(addedMiles)) mi)\(perMile)"
+            case .onTheWay: return "⚠️ ON THE WAY: only +\(f(addedMiles)) mi extra\(perMile)"
             case .offRoute where fromHere: return "❌ OFF ROUTE: ends \(f(dropoffToFinalMi)) mi from you"
             case .offRoute: return "❌ OFF ROUTE: +\(f(addedMiles)) mi extra, ends \(f(dropoffToFinalMi)) mi from your final stop"
             }
@@ -184,8 +184,8 @@ public struct TripPlanner {
         let toFinal = Geo.roadMiles(dropoff.location, lastStop.location)
         let perMile = added > 0.1 ? pay / added : nil
         let v: Verdict
-        if toFinal <= s.onTheWayRadiusMi { v = .nearFinal }   // ON THE WAY (checked first)
-        else if added <= s.maxDetourMi { v = .onTheWay }     // CLOSE BY
+        if toFinal <= s.onTheWayRadiusMi { v = .nearFinal }   // CLOSE BY (checked first)
+        else if added <= s.maxDetourMi { v = .onTheWay }     // ON THE WAY
         else { v = .offRoute }
         return OnTheWay(verdict: v, addedMiles: added, dropoffToFinalMi: toFinal, stackedPerMile: perMile, insertion: ins)
     }

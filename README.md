@@ -8,8 +8,8 @@ The app reads gig offers live from your screen through iOS screen broadcasting (
    - **% of your targets** for each (✅ ⚠️ ❌)
    - miles, minutes, and pay **after your cost per mile**
 2. **Checks offers from other apps.** If you already have stops on your route, the banner updates to say whether the new offer is:
-   - ✅ **ON THE WAY**: it adds ≤ your max-detour miles.
-   - ✅ **ENDS NEAR YOUR FINAL STOP**: within your radius.
+   - ✅ **CLOSE BY**: it ends within your radius of your final stop.
+   - ⚠️ **ON THE WAY**: it adds ≤ your max-detour miles.
    - ❌ **OFF ROUTE**
 
    It also shows **$ per *extra* mile**, the real value of stacking an order.
@@ -34,6 +34,8 @@ by detour, each split 🛍 Pickup / 🏠 Dropoff, in 1-mile steps from 0–1 to 
 Each graded offer now saves its pickup detour (worst store's extra miles) and dropoff detour (extra miles the
 order adds). Run the 5.9 lines at the bottom of `supabase/setup.sql` before installing. Only offers graded on
 5.9 or later have detour numbers.
+
+5.9.5: dropoff labels now match pickups: CLOSE BY ✅ is the closer one, ON THE WAY ⚠️ a small detour.
 
 5.9.1: dashed lines on every detour chart show your current limits (🛍 ON THE WAY limit, 🏠 max extra miles)
 and the $/mi chart shows your good/fair $/mi. They follow your Home settings the next time you open Insights.

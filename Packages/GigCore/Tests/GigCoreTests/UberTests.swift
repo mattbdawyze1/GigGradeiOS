@@ -92,7 +92,7 @@ final class NoRouteVerdictTests: XCTestCase {
         let s = DriverSettings(onTheWayRadiusMi: 3)
         let a = TripPlanner().checkOnTheWay(origin: me, pickup: p, dropoff: near, pay: 6, settings: s)
         XCTAssertEqual(a.verdict, .nearFinal)
-        XCTAssertTrue(a.message.hasPrefix("✅ ON THE WAY"))
+        XCTAssertTrue(a.message.hasPrefix("✅ CLOSE BY"))
         let b = TripPlanner().checkOnTheWay(origin: me, pickup: p, dropoff: far, pay: 6, settings: s)
         XCTAssertEqual(b.verdict, .offRoute)
         XCTAssertTrue(b.message.hasPrefix("❌ OFF ROUTE: ends"))
