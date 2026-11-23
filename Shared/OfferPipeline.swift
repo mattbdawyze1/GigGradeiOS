@@ -161,16 +161,46 @@ final class OfferPipeline {
                             hint: holdVerdict ? OfferAlert.tapPinHint : nil)
         }
 
-        // 2) Locate pickup/dropoff (text first, map as backup and cross-check), run the check, post.
+        // 2) Locate pickup/dropoff (text first, map as backup and cross-check; Uber name-only stores: map first),
+        //    run the check, post.
         Task {
+            if pins != nil { await Cloud.shared.pullSettingsIntoStore(force: true) } // freshest GPS: the map's dot is "now"
             let near = store.currentLocation
-            var pickupCoord = await PlaceFinder.find(offer.pickupText, near: near)
-            if pickupCoord == nil, let name = offer.pickupText, let town = PlaceFinder.town(in: offer.dropoffText) {
-                pickupCoord = await PlaceFinder.find("\(name), \(town)", near: near) // name-only stores
-            }
             var dropoffCoord = await PlaceFinder.find(offer.dropoffText, near: near)
             var estimated = false
             var streets: String?
+            var pickupCoord: Coord?
+            var pickupEstimated = false
+            var pickupFromMap = false
+
+            // Uber card with only the store's name: the store pin on Uber's map goes first.
+            // 1) Every place with that name is lined up with the store pin; the one that fits the map is the store.
+            // 2) None fits: the store is placed straight from its pin (you + the customer as references, ≈),
+            //    snapped to a store of that name if one is right there.
+            if offer.app == .uber, MapLocator.isNameOnly(offer.pickupText), let name = offer.pickupText,
+               let pins, let me = store.currentLocation, pins.me != nil, !pins.stores.isEmpty {
+                let named = await PlaceFinder.storeCandidates(name, near: me)
+                if let pick = MapLocator.pickStore(pins: pins, me: me, candidates: named, statedMiles: offer.miles,
+                                                   dropoff: dropoffCoord) {
+                    pickupCoord = pick.store
+                    pickupFromMap = true
+                    if let last = pick.customers.last,
+                       dropoffCoord == nil || Geo.straightMiles(dropoffCoord!, last) > 1.0 {
+                        dropoffCoord = last; estimated = true
+                    }
+                } else if let dc = dropoffCoord, let est = MapLocator.locatePickup(pins: pins, me: me, dropoff: dc) {
+                    let snap = named.filter { Geo.straightMiles($0, est) <= 0.3 }
+                        .min { Geo.straightMiles($0, est) < Geo.straightMiles($1, est) }
+                    pickupCoord = snap ?? est
+                    pickupEstimated = snap == nil
+                    pickupFromMap = true
+                }
+            }
+            // Otherwise (or the map couldn't place it): the card's text through Apple Maps.
+            if pickupCoord == nil { pickupCoord = await PlaceFinder.find(offer.pickupText, near: near) }
+            if pickupCoord == nil, let name = offer.pickupText, let town = PlaceFinder.town(in: offer.dropoffText) {
+                pickupCoord = await PlaceFinder.find("\(name), \(town)", near: near) // name-only stores
+            }
 
             // Every store on the card (batches list two), looked up at the same time.
             var knownStores: [Coord] = pickupCoord.map { [$0] } ?? []
@@ -181,19 +211,22 @@ final class OfferPipeline {
                     for await c in group { if let c { knownStores.append(c) } }
                 }
             }
-            var batch = Batch(stores: knownStores.map { (coord: $0, estimated: false) }, customers: [], unchecked: 0)
+            var batch = Batch(stores: knownStores.enumerated().map { (coord: $0.element, estimated: $0.offset == 0 && pickupEstimated) },
+                              customers: [], unchecked: 0)
 
             if let pins {
-                await Cloud.shared.pullSettingsIntoStore(force: true) // freshest GPS: the map's arrow/dot is "now"
                 // Every pin: the card's stores confirm the map; stores and customers not on the card are
                 // estimated from their pins (≈).
                 if let me = store.currentLocation,
                    let placed = MapLocator.placeAll(pins: pins, me: me, known: knownStores, statedMiles: offer.miles) {
-                    batch.stores = placed.stores
+                    batch.stores = placed.stores.map { s in
+                        // A store placed from its pin stays marked ≈ even though it was passed in as known.
+                        (coord: s.coord, estimated: s.estimated || (pickupEstimated && s.coord == pickupCoord))
+                    }
                     batch.customers = placed.customers
                 }
                 if let me = store.currentLocation {
-                    if let pc = pickupCoord,
+                    if !pickupFromMap, let pc = pickupCoord,
                        let est = MapLocator.locate(pins: pins, me: me, store: pc, statedMiles: offer.miles) {
                         // Use the map when there's no dropoff address, or when the address lookup landed
                         // far from where the map's pin actually is (wrong match).
@@ -204,17 +237,22 @@ final class OfferPipeline {
                     }
                     if pickupCoord == nil, let dc = dropoffCoord,
                        let pc = MapLocator.locatePickup(pins: pins, me: me, dropoff: dc) {
-                        pickupCoord = pc // store name Apple Maps couldn't find
+                        pickupCoord = pc; pickupEstimated = true // store name Apple Maps couldn't find
                     }
                 }
                 if dropoffCoord == nil, offer.app != .doordash, // DoorDash: the tapped address replaces this guess
                    let s = await self.streetEstimate(lines: lines, pins: pins, pickup: pickupCoord, offer: offer) {
                     dropoffCoord = s.coord; estimated = true; streets = s.names
+                    // Store still unknown: try its pin again now that the customer is placed.
+                    if pickupCoord == nil, let me = store.currentLocation,
+                       let pc = MapLocator.locatePickup(pins: pins, me: me, dropoff: s.coord) {
+                        pickupCoord = pc; pickupEstimated = true
+                    }
                 }
             }
 
             // Stores the card or the map showed that couldn't be placed (e.g. pins stacked on top of each other).
-            if batch.stores.isEmpty, let pc = pickupCoord { batch.stores = [(coord: pc, estimated: false)] }
+            if batch.stores.isEmpty, let pc = pickupCoord { batch.stores = [(coord: pc, estimated: pickupEstimated)] }
             let expectedStores = max(offer.pickupTexts.count, pins?.stores.count ?? 0, 1)
             batch.unchecked = max(0, expectedStores - batch.stores.count)
             self.lock.lock(); self.batches = [key: batch]; self.lock.unlock()

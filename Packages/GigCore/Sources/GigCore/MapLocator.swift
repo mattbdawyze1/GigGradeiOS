@@ -100,6 +100,39 @@ public enum MapLocator {
                         metersPerPixel: solved.metersPerPixel)
     }
 
+    /// True when the pickup text is only a store name ("Halal City"), with no street address ("12 Main St").
+    public static func isNameOnly(_ text: String?) -> Bool {
+        guard let t = text?.trimmingCharacters(in: .whitespaces), !t.isEmpty else { return false }
+        return t.range(of: #"(^|[\s,])\d{1,6}[A-Za-z]?\s+[A-Za-z]"#, options: .regularExpression) == nil
+    }
+
+    /// Uber, store name only: of every location with that name, pick the one that fits the store pin on the map.
+    /// Each candidate is lined up with the store pin (your blue dot is the other reference). A wrong branch puts
+    /// the map at the wrong angle or scale, or the trip doesn't match the offer's miles, or the customer pin lands
+    /// away from the customer's address. Returns the best fit and the customers it places.
+    public static func pickStore(pins: MapPins, me: Coord, candidates: [Coord], statedMiles: Double?,
+                                 dropoff: Coord? = nil) -> (store: Coord, customers: [Coord])? {
+        guard let meP = pins.me, let storeP = pins.stores.first else { return nil }
+        var best: (score: Double, store: Coord, customers: [Coord])?
+        for cand in candidates {
+            guard let solved = solve(refA: meP, worldA: me, refB: storeP, worldB: cand, targets: pins.customers)
+            else { continue }                                   // wrong angle or scale: not this branch
+            let customers = solved.coords.sorted { Geo.straightMiles(cand, $0) < Geo.straightMiles(cand, $1) }
+            var score = 0.0
+            if let miles = statedMiles, miles > 0 {
+                let trip = Geo.roadMiles(me, cand) + Geo.routeMiles([cand] + customers)
+                let ratio = trip / miles
+                if ratio < 0.5 || ratio > 2 { continue }       // the trip doesn't fit the offer's miles
+                score += abs(trip - miles) / miles
+            }
+            if let dropoff, let last = customers.last {
+                score += min(Geo.straightMiles(dropoff, last), 3) // customer pin should sit on the address
+            }
+            if best == nil || score < best!.score { best = (score, cand, customers) }
+        }
+        return best.map { ($0.store, $0.customers) }
+    }
+
     /// The reverse: dropoff known (from its address), pickup unknown (e.g. a store name Apple Maps can't find).
     public static func locatePickup(pins: MapPins, me: Coord, dropoff: Coord) -> Coord? {
         guard let meP = pins.me, let dropP = pins.customers.last, let storeP = pins.stores.first,

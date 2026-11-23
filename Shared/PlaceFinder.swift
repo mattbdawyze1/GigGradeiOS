@@ -95,6 +95,18 @@ enum PlaceFinder {
         return found.filter { Geo.straightMiles(near, $0) < 40 }
     }
 
+    /// Every place with this store name within 40 mi (e.g. each McDonald's), so the map can pick the right one.
+    static func storeCandidates(_ name: String, near: Coord?) async -> [Coord] {
+        let req = MKLocalSearch.Request()
+        req.naturalLanguageQuery = name
+        req.resultTypes = .pointOfInterest
+        if let near { req.region = MKCoordinateRegion(center: near.cl, latitudinalMeters: 50_000, longitudinalMeters: 50_000) }
+        guard let resp = try? await MKLocalSearch(request: req).start() else { return [] }
+        let found = resp.mapItems.map { Coord($0.placemark.coordinate) }
+        guard let near else { return found }
+        return found.filter { Geo.straightMiles(near, $0) < 40 }
+    }
+
     /// Is there a street with this name within about half a mile of `spot`? (Checks a zoomed map's street names
     /// against one of several "54 Elderwood Lane" matches.)
     static func streetNear(_ name: String, around spot: Coord, miles: Double = 0.6) async -> Bool {
