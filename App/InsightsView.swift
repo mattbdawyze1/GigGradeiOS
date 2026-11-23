@@ -21,8 +21,6 @@ struct InsightsView: View {
                 let apps = Stats.byApp(model.records, costPerMile: cost)
                 let unit = model.period.bucketComponent
 
-                DetourCharts(records: model.records, settings: s)
-
                 Section("Highlights") {
                     ForEach(Array(Stats.insights(current: sum, previous: prev, buckets: buckets, apps: apps,
                                                  period: model.period, settings: s).enumerated()), id: \.offset) { _, line in
@@ -72,6 +70,8 @@ struct InsightsView: View {
                               value: { $0.summary.avgHourly }, fair: s.hourlyFair, good: s.hourlyGood, format: "$%.0f")
                     rateChart(title: "Average $ per mile", buckets: buckets, unit: unit,
                               value: { $0.summary.avgPerMile }, fair: s.perMileFair, good: s.perMileGood, format: "$%.2f")
+
+                    DetourCharts(records: model.records, settings: s)
 
                     let earning = apps.filter { $0.summary.income > 0 }
                     if !earning.isEmpty {
