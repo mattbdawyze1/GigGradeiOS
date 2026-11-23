@@ -107,4 +107,64 @@ public enum MapLocator {
         else { return nil }
         return solved.coords.first
     }
+
+    // MARK: Every pin (batch offers)
+
+    public struct Placed: Equatable {
+        public var stores: [(coord: Coord, estimated: Bool)]
+        public var customers: [Coord]          // estimated from the map
+        public static func == (a: Placed, b: Placed) -> Bool {
+            a.customers == b.customers && a.stores.map { $0.coord } == b.stores.map { $0.coord }
+                && a.stores.map { $0.estimated } == b.stores.map { $0.estimated }
+        }
+    }
+
+    /// Places every store and customer pin on the offer's map.
+    /// The card's store addresses (`known`) are the facts: the map is lined up using your blue dot plus
+    /// whichever store pin best matches them (every pairing is tried; the one where the other known stores
+    /// land on pins and the trip fits the offer's miles wins). A pin within half a mile of a known store is
+    /// that store (its address wins); other store pins and all customer pins are estimates (≈).
+    public static func placeAll(pins: MapPins, me: Coord, known: [Coord], statedMiles: Double?) -> Placed? {
+        guard let meP = pins.me, !known.isEmpty, !pins.stores.isEmpty else { return nil }
+        let targets = pins.stores + pins.customers
+        var best: (score: Double, coords: [Coord])?
+        for k in known.indices {
+            for sp in pins.stores {
+                guard let solved = solve(refA: meP, worldA: me, refB: sp, worldB: known[k], targets: targets) else { continue }
+                let storeCoords = Array(solved.coords.prefix(pins.stores.count))
+                let customerCoords = Array(solved.coords.dropFirst(pins.stores.count))
+                // Other known stores should sit on a store pin.
+                var score = 0.0
+                for (j, kc) in known.enumerated() where j != k {
+                    let miss = storeCoords.map { Geo.straightMiles($0, kc) }.min() ?? 3
+                    score += min(miss, 3)
+                }
+                // The trip should roughly fit the offer's miles: you -> stores -> customers.
+                if let miles = statedMiles, miles > 0 {
+                    let stores = storeCoords.sorted { Geo.straightMiles(me, $0) < Geo.straightMiles(me, $1) }
+                    let last = stores.last ?? me
+                    let customers = customerCoords.sorted { Geo.straightMiles(last, $0) < Geo.straightMiles(last, $1) }
+                    let trip = Geo.routeMiles([me] + stores + customers)
+                    let ratio = trip / miles
+                    if ratio < 0.3 || ratio > 3 { continue }        // doesn't fit at all
+                    score += abs(trip - miles) / miles
+                }
+                if best == nil || score < best!.score { best = (score, solved.coords) }
+            }
+        }
+        guard let coords = best?.coords else { return nil }
+        let mappedStores = Array(coords.prefix(pins.stores.count))
+        let customers = Array(coords.dropFirst(pins.stores.count))
+
+        var used = Set<Int>()
+        var stores: [(coord: Coord, estimated: Bool)] = []
+        for m in mappedStores {
+            let match = known.indices.filter { !used.contains($0) && Geo.straightMiles(known[$0], m) <= 0.5 }
+                .min { Geo.straightMiles(known[$0], m) < Geo.straightMiles(known[$1], m) }
+            if let j = match { used.insert(j); stores.append((known[j], false)) } // the card's address wins
+            else { stores.append((m, true)) }                                      // a store not on the card
+        }
+        for j in known.indices where !used.contains(j) { stores.append((known[j], false)) } // listed, no clear pin
+        return Placed(stores: stores, customers: customers)
+    }
 }

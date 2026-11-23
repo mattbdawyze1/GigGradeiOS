@@ -50,7 +50,8 @@ enum OfferAlert {
 
     /// Text for each banner item (empty when it doesn't apply to this offer).
     static func values(_ o: Offer, _ s: Score, _ settings: DriverSettings, _ p: NotificationPrefs,
-                       _ otw: TripPlanner.OnTheWay?, _ dropoff: DropoffInfo?, hint: String? = nil) -> [BannerItem: String] {
+                       _ otw: TripPlanner.OnTheWay?, _ dropoff: DropoffInfo?, hint: String? = nil,
+                       pickupCheck: PickupCheck? = nil, drops: Int = 1) -> [BannerItem: String] {
         var v: [BannerItem: String] = [:]
         v[.color] = "\(s.category.dot) \(s.category.label)"
         v[.grade] = s.grade
@@ -69,15 +70,20 @@ enum OfferAlert {
         if let mi = o.miles { v[.miles] = String(format: "%.1f mi", mi) }
         if let mn = o.minutes { v[.minutes] = "\(mn) min" }
         if let net = s.netPay { v[.net] = String(format: "net $%.2f", net) }
-        if let otw { v[.verdict] = otw.shortMessage } else if let hint { v[.verdict] = hint }
+        if let otw {
+            // One item, both checks: "🛍 ✅ 0.3 mi from Chipotle · 🏠 ⚠️ +1.2 mi".
+            v[.verdict] = [pickupCheck?.compact, otw.compact(drops: drops)]
+                .compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · ")
+        } else if let hint { v[.verdict] = hint }
         if let dropoff { v[.dropoff] = dropoff.line }
         return v
     }
 
     static func content(_ o: Offer, _ s: Score, _ settings: DriverSettings, _ p: NotificationPrefs,
                         _ otw: TripPlanner.OnTheWay?, dropoff: DropoffInfo? = nil,
-                        hint: String? = nil) -> (title: String, subtitle: String, body: String) {
-        p.effectiveLayout.compose(values(o, s, settings, p, otw, dropoff, hint: hint))
+                        hint: String? = nil, pickupCheck: PickupCheck? = nil,
+                        drops: Int = 1) -> (title: String, subtitle: String, body: String) {
+        p.effectiveLayout.compose(values(o, s, settings, p, otw, dropoff, hint: hint, pickupCheck: pickupCheck, drops: drops))
     }
 
     static func sound(_ choice: SoundChoice) -> UNNotificationSound? {
@@ -92,9 +98,11 @@ enum OfferAlert {
 
     static func post(record: OfferRecord, offer: Offer, score: Score, settings: DriverSettings,
                      prefs: NotificationPrefs, otw: TripPlanner.OnTheWay?, canAddToRoute: Bool, silent: Bool,
-                     dropoff: DropoffInfo? = nil, hint: String? = nil) {
+                     dropoff: DropoffInfo? = nil, hint: String? = nil,
+                     pickupCheck: PickupCheck? = nil, drops: Int = 1) {
         let c = UNMutableNotificationContent()
-        let text = content(offer, score, settings, prefs, otw, dropoff: dropoff, hint: hint)
+        let text = content(offer, score, settings, prefs, otw, dropoff: dropoff, hint: hint,
+                           pickupCheck: pickupCheck, drops: drops)
         c.title = text.title
         c.subtitle = text.subtitle   // its own line, so line 2 is always visible
         c.body = text.body

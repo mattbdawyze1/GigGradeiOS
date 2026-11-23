@@ -21,6 +21,8 @@ struct InsightsView: View {
                 let apps = Stats.byApp(model.records, costPerMile: cost)
                 let unit = model.period.bucketComponent
 
+                DetourCharts(records: model.records, settings: s)
+
                 Section("Highlights") {
                     ForEach(Array(Stats.insights(current: sum, previous: prev, buckets: buckets, apps: apps,
                                                  period: model.period, settings: s).enumerated()), id: \.offset) { _, line in
@@ -155,5 +157,151 @@ struct InsightsView: View {
                 Text("\(above) of \(points.count) \(model.period.bucketName)\(points.count == 1 ? "" : "s") with orders were at or above your good level.")
             }
         }
+    }
+}
+
+
+/// Detours, 0 to 5+ mi: how many offers fell in each range, what they paid per mile, and how many you took.
+/// 🛍 = extra miles to fit the store into your route, 🏠 = extra miles the whole order adds.
+/// Dashed lines show your current limits (Home settings), so they move when you change them.
+struct DetourCharts: View {
+    let records: [OfferRecord]
+    let settings: DriverSettings
+
+    static let pickupColor = Color.orange, dropoffColor = Color.blue
+    static func color(_ k: DetourStats.Kind) -> Color { k == .pickup ? pickupColor : dropoffColor }
+
+    var body: some View {
+        let pickup = DetourStats.buckets(records, kind: .pickup)
+        let dropoff = DetourStats.buckets(records, kind: .dropoff)
+        let all = pickup + dropoff
+        let counted = all.map(\.offers).reduce(0, +)
+
+        Section {
+            if counted == 0 {
+                Text("No detour data for this period yet. Offers graded from version 5.9 on are counted here.")
+                    .font(.footnote).foregroundStyle(.secondary)
+            } else {
+                Chart {
+                    ForEach(all) { b in
+                        // Side-by-side bars inside each 1-mile range: 🛍 left half, 🏠 right half.
+                        let left = Double(b.index) + (b.kind == .pickup ? 0.08 : 0.5)
+                        BarMark(xStart: .value("From", left), xEnd: .value("To", left + 0.42),
+                                y: .value("Offers", b.offers))
+                            .foregroundStyle(by: .value("Check", b.kind.rawValue))
+                    }
+                    limitLines
+                }
+                .modifier(DetourAxis())
+                .frame(height: 200)
+            }
+        } header: {
+            Text("Offers by detour")
+        } footer: {
+            if counted > 0 { Text("🛍 extra miles to fit the store into your route · 🏠 extra miles the whole order adds. Dashed lines = your limits.") }
+        }
+
+        if counted > 0 {
+            Section {
+                Chart {
+                    ForEach(all.filter { $0.avgPerMile != nil }) { b in
+                        LineMark(x: .value("Detour", Double(b.index) + 0.5), y: .value("$/mi", b.avgPerMile ?? 0))
+                            .foregroundStyle(by: .value("Check", b.kind.rawValue))
+                        PointMark(x: .value("Detour", Double(b.index) + 0.5), y: .value("$/mi", b.avgPerMile ?? 0))
+                            .foregroundStyle(by: .value("Check", b.kind.rawValue))
+                    }
+                    RuleMark(y: .value("Good", settings.perMileGood))
+                        .foregroundStyle(OfferCategory.good.color)
+                        .lineStyle(StrokeStyle(lineWidth: 1, dash: [4, 3]))
+                        .annotation(position: .top, alignment: .trailing) {
+                            Text(String(format: "good $%.2f", settings.perMileGood)).font(.caption2).foregroundStyle(OfferCategory.good.color)
+                        }
+                    RuleMark(y: .value("Fair", settings.perMileFair))
+                        .foregroundStyle(OfferCategory.fair.color)
+                        .lineStyle(StrokeStyle(lineWidth: 1, dash: [4, 3]))
+                        .annotation(position: .bottom, alignment: .trailing) {
+                            Text(String(format: "fair $%.2f", settings.perMileFair)).font(.caption2).foregroundStyle(OfferCategory.fair.color)
+                        }
+                    limitLines
+                }
+                .chartYAxis {
+                    AxisMarks { v in
+                        AxisGridLine()
+                        AxisValueLabel { if let d = v.as(Double.self) { Text(String(format: "$%.2f", d)) } }
+                    }
+                }
+                .modifier(DetourAxis())
+                .frame(height: 190)
+            } header: {
+                Text("Pay per mile by detour")
+            } footer: {
+                Text("Green and yellow lines are your good and fair $/mi.")
+            }
+
+            Section("Accepted by detour") {
+                Chart {
+                    ForEach(all.filter { $0.offers > 0 }) { b in
+                        let left = Double(b.index) + (b.kind == .pickup ? 0.08 : 0.5)
+                        BarMark(xStart: .value("From", left), xEnd: .value("To", left + 0.42),
+                                y: .value("Accepted %", b.acceptedPct ?? 0))
+                            .foregroundStyle(by: .value("Check", b.kind.rawValue))
+                    }
+                    limitLines
+                }
+                .chartYScale(domain: 0...100)
+                .chartYAxis {
+                    AxisMarks(values: [0, 25, 50, 75, 100]) { v in
+                        AxisGridLine()
+                        AxisValueLabel { if let d = v.as(Double.self) { Text("\(Int(d))%") } }
+                    }
+                }
+                .modifier(DetourAxis())
+                .frame(height: 180)
+            }
+
+            let lines = DetourStats.insights(records, settings: settings)
+            if !lines.isEmpty {
+                Section("Detour takeaways") {
+                    ForEach(Array(lines.enumerated()), id: \.offset) { _, line in
+                        Label(line, systemImage: "arrow.triangle.branch").font(.subheadline)
+                    }
+                }
+            }
+        }
+    }
+
+    /// Dashed vertical lines at your pickup ON THE WAY limit and your dropoff max extra miles.
+    @ChartContentBuilder
+    private var limitLines: some ChartContent {
+        ForEach(DetourStats.Kind.allCases) { k in
+            let lim = min(DetourStats.limit(k, settings), 6)
+            RuleMark(x: .value("Limit", lim))
+                .foregroundStyle(Self.color(k))
+                .lineStyle(StrokeStyle(lineWidth: 1.5, dash: [5, 3]))
+                .annotation(position: .top, alignment: k == .pickup ? .trailing : .leading, spacing: 2) {
+                    Text((k == .pickup ? "🛍 " : "🏠 ") + String(format: "%.1f", DetourStats.limit(k, settings)))
+                        .font(.caption2.weight(.semibold)).foregroundStyle(Self.color(k))
+                }
+        }
+    }
+}
+
+/// Shared 0 to 5+ mi x-axis for the detour charts.
+private struct DetourAxis: ViewModifier {
+    func body(content: Content) -> some View {
+        content
+            .chartXScale(domain: 0...6)
+            .chartXAxis {
+                AxisMarks(values: [0, 1, 2, 3, 4, 5]) { v in
+                    AxisGridLine()
+                    AxisTick()
+                    AxisValueLabel {
+                        if let d = v.as(Double.self) { Text(d >= 5 ? "5+" : "\(Int(d))") }
+                    }
+                }
+            }
+            .chartXAxisLabel("extra miles")
+            .chartForegroundStyleScale([DetourStats.Kind.pickup.rawValue: DetourCharts.pickupColor,
+                                        DetourStats.Kind.dropoff.rawValue: DetourCharts.dropoffColor])
     }
 }

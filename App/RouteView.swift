@@ -220,18 +220,19 @@ final class RouteModel: ObservableObject {
 
     /// Route in Google Maps (first 9 stops if there are more). Returns true if some stops were left out.
     @discardableResult
+    /// What Google Maps is sent for a stop: its address text (no name), so it finds the exact address
+    /// instead of snapping a map point to the building next door. Stops with no saved address use the pin.
+    private func target(_ s: Stop) -> String {
+        if let a = s.nameAndAddress.address?.trimmingCharacters(in: .whitespacesAndNewlines), !a.isEmpty {
+            return a.replacingOccurrences(of: "|", with: " ")
+        }
+        return "\(s.location.lat),\(s.location.lng)"
+    }
+
     func navigate() -> Bool {
         guard !stops.isEmpty else { return false }
         let batch = Array(stops.prefix(Self.googleMapsMaxStops))
-        // Each stop goes to Google Maps as its address text (no name), so Google finds the exact address
-        // instead of snapping a map point to the building next door. Stops with no saved address use the pin.
-        let target = { (s: Stop) -> String in
-            if let a = s.nameAndAddress.address?.trimmingCharacters(in: .whitespacesAndNewlines), !a.isEmpty {
-                return a.replacingOccurrences(of: "|", with: " ")
-            }
-            return "\(s.location.lat),\(s.location.lng)"
-        }
-        let waypoints = batch.dropLast().map(target).joined(separator: "|")
+        let waypoints = batch.dropLast().map { target($0) }.joined(separator: "|")
         var comps = URLComponents(string: "https://www.google.com/maps/dir/")!
         comps.queryItems = [
             URLQueryItem(name: "api", value: "1"),

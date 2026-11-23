@@ -107,7 +107,7 @@ public enum OfferParser {
             pickup = u.pickup
             dropoff = u.dropoff
         }
-        return Offer(
+        var offer = Offer(
             app: app,
             pay: pay,
             miles: pickMiles(lines),
@@ -116,6 +116,45 @@ public enum OfferParser {
             dropoffText: dropoff,
             rawText: text
         )
+        // Every store on the card (DoorDash batches list each one), and DoorDash's stop count.
+        let stores = app == .doordash ? doorDashStores(lines) : []
+        offer.pickupTexts = stores.count > 1 ? stores : [pickup].compactMap { $0 }
+        if app == .doordash, let line = lines.first(where: { stopsLine.contains($0) && milesRx.contains($0) }),
+           let m = Rx(#"\b(\d+)\s+stops?\b"#).first(line), let n = Int(m.groups[1] ?? "") {
+            offer.stopCount = n
+        }
+        return offer
+    }
+
+    /// DoorDash: every store between "N stops (x mi)" and the dropoff line, each "Name, street town zip".
+    ///   Carvel Ice Cream / 110 Commack Road, Commack, 11725 NY / Chico's Tex Mex / 128 Commack Rd, … / Multiple dropoffs
+    static func doorDashStores(_ lines: [String]) -> [String] {
+        guard let start = lines.firstIndex(where: { stopsLine.contains($0) && milesRx.contains($0) }) else { return [] }
+        var stores: [String] = []
+        var name: String?
+        var address: [String] = []
+        func close() {
+            if let n = name { stores.append(([n] + (address.isEmpty ? [] : [address.joined(separator: " ")])).joined(separator: ", ")) }
+            name = nil; address = []
+        }
+        var i = start + 1
+        while i < lines.count {
+            let line = lines[i]
+            let low = line.lowercased()
+            if dashDropCue.contains(low) || low == "accept" || low == "decline" || low.hasPrefix("accept ") { break }
+            if line.first?.isNumber ?? false {
+                if name != nil { address.append(line); if addressEnd.contains(line) { close() } }
+            } else if name != nil, !address.isEmpty {
+                address.append(line)                  // a wrapped address line ("NY 11706")
+                if addressEnd.contains(line) { close() }
+            } else {
+                if name != nil { close() }            // a store with no address shown
+                name = line
+            }
+            i += 1
+        }
+        close()
+        return stores
     }
 
     // MARK: Uber layout

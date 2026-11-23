@@ -15,6 +15,13 @@ extension OfferRecord {
         r.dropoffEstimated = estimated
         return r
     }
+
+    func withDetours(pickup: Double?, dropoff: Double?) -> OfferRecord {
+        var r = self
+        r.pickupDetourMi = pickup
+        r.dropoffDetourMi = dropoff
+        return r
+    }
 }
 
 enum MapEstimate {
@@ -159,6 +166,8 @@ actor Cloud {
         var pickup_stop: Stop?
         var dropoff_stop: Stop?
         var updated_at: Date?
+        var pickup_detour_mi: Double?
+        var dropoff_detour_mi: Double?
 
         init(_ r: OfferRecord, screenshotPath: String?, stops: (pickup: Stop, dropoff: Stop)?) {
             id = r.id; date = r.date; app = r.app.rawValue; pay = r.pay; miles = r.miles; minutes = r.minutes
@@ -167,6 +176,7 @@ actor Cloud {
             screenshot_path = screenshotPath; decision = nil
             pickup_stop = stops?.pickup; dropoff_stop = stops?.dropoff
             updated_at = r.updatedAt ?? r.date
+            pickup_detour_mi = r.pickupDetourMi; dropoff_detour_mi = r.dropoffDetourMi
         }
 
         var record: OfferRecord {
@@ -178,6 +188,7 @@ actor Cloud {
                         decision: Decision(rawValue: decision ?? "pending") ?? .pending, updatedAt: updated_at)
                 .withLocations(pickup: pickup_stop?.location, dropoff: dropoff_stop?.location,
                                estimated: dropoff_stop.map { $0.label.contains(MapEstimate.label) })
+                .withDetours(pickup: pickup_detour_mi, dropoff: dropoff_detour_mi)
         }
     }
 

@@ -28,6 +28,16 @@ final class OfferPipeline {
 
     private var currentKey: String? { lock.lock(); defer { lock.unlock() }; return lastKey }
 
+    /// Every store and customer placed for an offer (card addresses first, then map pins), for the pickup
+    /// check and batch offers. Keyed by the offer.
+    private struct Batch {
+        var stores: [(coord: Coord, estimated: Bool)]
+        var customers: [Coord]
+        var unchecked: Int
+    }
+    private var batches: [String: Batch] = [:]
+    private func batch(_ key: String) -> Batch? { lock.lock(); defer { lock.unlock() }; return batches[key] }
+
     /// Last time an offer (readable or not) was on screen. 👓 ends its reading when an offer shows up after the press.
     var lastOfferSeen: Date { lock.lock(); defer { lock.unlock() }; return max(lastSeen, lastOfferishAt) }
 
@@ -162,8 +172,26 @@ final class OfferPipeline {
             var estimated = false
             var streets: String?
 
+            // Every store on the card (batches list two), looked up at the same time.
+            var knownStores: [Coord] = pickupCoord.map { [$0] } ?? []
+            if offer.pickupTexts.count > 1 {
+                let others = Array(offer.pickupTexts.dropFirst())
+                await withTaskGroup(of: Coord?.self) { group in
+                    for text in others { group.addTask { await PlaceFinder.find(text, near: near) } }
+                    for await c in group { if let c { knownStores.append(c) } }
+                }
+            }
+            var batch = Batch(stores: knownStores.map { (coord: $0, estimated: false) }, customers: [], unchecked: 0)
+
             if let pins {
                 await Cloud.shared.pullSettingsIntoStore(force: true) // freshest GPS: the map's arrow/dot is "now"
+                // Every pin: the card's stores confirm the map; stores and customers not on the card are
+                // estimated from their pins (≈).
+                if let me = store.currentLocation,
+                   let placed = MapLocator.placeAll(pins: pins, me: me, known: knownStores, statedMiles: offer.miles) {
+                    batch.stores = placed.stores
+                    batch.customers = placed.customers
+                }
                 if let me = store.currentLocation {
                     if let pc = pickupCoord,
                        let est = MapLocator.locate(pins: pins, me: me, store: pc, statedMiles: offer.miles) {
@@ -184,6 +212,12 @@ final class OfferPipeline {
                     dropoffCoord = s.coord; estimated = true; streets = s.names
                 }
             }
+
+            // Stores the card or the map showed that couldn't be placed (e.g. pins stacked on top of each other).
+            if batch.stores.isEmpty, let pc = pickupCoord { batch.stores = [(coord: pc, estimated: false)] }
+            let expectedStores = max(offer.pickupTexts.count, pins?.stores.count ?? 0, 1)
+            batch.unchecked = max(0, expectedStores - batch.stores.count)
+            self.lock.lock(); self.batches = [key: batch]; self.lock.unlock()
 
             let done = await self.finish(key: key, offer: offer, saved: saved, score: score, settings: settings,
                                          prefs: prefs, pickup: pickupCoord, dropoff: dropoffCoord,
@@ -421,10 +455,38 @@ final class OfferPipeline {
         }
 
         let planner = TripPlanner(stops: store.stops)
-        let otw = planner.checkOnTheWay(origin: store.currentLocation ?? pickup, pickup: p, dropoff: d,
-                                        pay: offer.pay, settings: settings)
+        let origin = store.currentLocation ?? pickup
+        var otw = planner.checkOnTheWay(origin: origin, pickup: p, dropoff: d, pay: offer.pay, settings: settings)
+
+        // Pickup check: each of the offer's stores against every pickup in your route (worst one shown).
+        let info = batch(key)
+        let fallback: [(coord: Coord, estimated: Bool)] = pickup.map { [(coord: $0, estimated: false)] } ?? []
+        let storesToCheck = info?.stores ?? fallback
+        let pickupCheck = planner.checkPickups(stores: storesToCheck, unchecked: info?.unchecked ?? 0,
+                                               origin: origin, settings: settings)
+        // Batch offers (2+ stores or customers): the extra miles cover all of the offer's stops.
+        var drops = 1
+        if let info, let d, let origin, let last = planner.stops.last,
+           info.stores.count > 1 || info.customers.count > 1 {
+            drops = max(info.customers.count, 1)
+            let customers = info.customers.count > 1 ? info.customers : [d.location]
+            let added = planner.addedMiles(stores: info.stores.map { $0.coord }, customers: customers, origin: origin)
+            let toFinal = Geo.roadMiles(d.location, last.location)
+            let v: TripPlanner.Verdict = toFinal <= settings.onTheWayRadiusMi ? .nearFinal
+                : added <= settings.maxDetourMi ? .onTheWay : .offRoute
+            let wasApproximate = otw.approximate
+            otw = TripPlanner.OnTheWay(verdict: v, addedMiles: added, dropoffToFinalMi: toFinal,
+                                       stackedPerMile: added > 0.1 ? offer.pay / added : nil)
+            otw.approximate = wasApproximate || info.stores.contains { $0.estimated }
+        }
         let note = otw.message
-        log.update(id: saved.id, dayKey: dayKey) { $0.routeNote = note }
+        let fullNote = pickupCheck.message + "\n" + otw.message
+        let pickupDetour = pickupCheck.worst?.detourMi, dropoffDetour = otw.addedMiles
+        log.update(id: saved.id, dayKey: dayKey) {
+            $0.routeNote = fullNote
+            $0.pickupDetourMi = pickupDetour     // for the Insights detour charts
+            $0.dropoffDetourMi = dropoffDetour
+        }
         var canAdd = false
         if let p, let d {
             store.savePending(orderId: orderId, pickup: p, dropoff: d) // also sent to the cloud with the offer
@@ -465,7 +527,8 @@ final class OfferPipeline {
         }
         if post {
             OfferAlert.post(record: saved, offer: offer, score: score, settings: settings, prefs: prefs,
-                            otw: otw, canAddToRoute: canAdd, silent: false, dropoff: dropoffInfo)
+                            otw: otw, canAddToRoute: canAdd, silent: false, dropoff: dropoffInfo,
+                            pickupCheck: pickupCheck, drops: drops)
         }
         return (d != nil, note)
     }

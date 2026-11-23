@@ -14,6 +14,10 @@ public struct Offer: Equatable {
     public var pickupText: String?
     public var dropoffText: String?
     public var rawText: String
+    /// Every store listed on the card (DoorDash batches can list two). `pickupText` is the first.
+    public var pickupTexts: [String] = []
+    /// "4 stops (10.5 mi)" -> 4 (DoorDash), for spotting stops the map can't show.
+    public var stopCount: Int?
 
     public init(app: GigApp, pay: Double, miles: Double?, minutes: Int?,
                 pickupText: String?, dropoffText: String?, rawText: String) {
@@ -35,6 +39,8 @@ public struct DriverSettings: Codable, Equatable {
     public var costPerMile: Double       // gas + wear, for "after costs" numbers
     public var onTheWayRadiusMi: Double  // new dropoff within this of your final stop = OK
     public var maxDetourMi: Double       // extra miles you'll accept to stack an order
+    public var pickupNearMi: Double      // offer's store within this of a pickup in your route = CLOSE BY
+    public var pickupMaxDetourMi: Double // fitting the store in adds no more than this = ON THE WAY (more = OFF ROUTE)
 
     /// The letter grade and "% of target" compare against the upper (good) level.
     public var targetHourly: Double { hourlyGood }
@@ -42,14 +48,17 @@ public struct DriverSettings: Codable, Equatable {
 
     public init(hourlyFair: Double = 18, hourlyGood: Double = 25,
                 perMileFair: Double = 1.0, perMileGood: Double = 1.5,
-                costPerMile: Double = 0.30, onTheWayRadiusMi: Double = 3, maxDetourMi: Double = 2) {
+                costPerMile: Double = 0.30, onTheWayRadiusMi: Double = 3, maxDetourMi: Double = 2,
+                pickupNearMi: Double = 1.0, pickupMaxDetourMi: Double = 1.5) {
         self.hourlyFair = hourlyFair; self.hourlyGood = hourlyGood
         self.perMileFair = perMileFair; self.perMileGood = perMileGood
         self.costPerMile = costPerMile; self.onTheWayRadiusMi = onTheWayRadiusMi; self.maxDetourMi = maxDetourMi
+        self.pickupNearMi = pickupNearMi; self.pickupMaxDetourMi = pickupMaxDetourMi
     }
 
     private enum CodingKeys: String, CodingKey {
         case hourlyFair, hourlyGood, perMileFair, perMileGood, costPerMile, onTheWayRadiusMi, maxDetourMi
+        case pickupNearMi, pickupMaxDetourMi
         case targetHourly, targetPerMile // version 1 names
     }
 
@@ -65,6 +74,8 @@ public struct DriverSettings: Codable, Equatable {
         costPerMile = try c.decodeIfPresent(Double.self, forKey: .costPerMile) ?? d.costPerMile
         onTheWayRadiusMi = try c.decodeIfPresent(Double.self, forKey: .onTheWayRadiusMi) ?? d.onTheWayRadiusMi
         maxDetourMi = try c.decodeIfPresent(Double.self, forKey: .maxDetourMi) ?? d.maxDetourMi
+        pickupNearMi = try c.decodeIfPresent(Double.self, forKey: .pickupNearMi) ?? d.pickupNearMi
+        pickupMaxDetourMi = try c.decodeIfPresent(Double.self, forKey: .pickupMaxDetourMi) ?? d.pickupMaxDetourMi
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -73,6 +84,7 @@ public struct DriverSettings: Codable, Equatable {
         try c.encode(perMileFair, forKey: .perMileFair); try c.encode(perMileGood, forKey: .perMileGood)
         try c.encode(costPerMile, forKey: .costPerMile); try c.encode(onTheWayRadiusMi, forKey: .onTheWayRadiusMi)
         try c.encode(maxDetourMi, forKey: .maxDetourMi)
+        try c.encode(pickupNearMi, forKey: .pickupNearMi); try c.encode(pickupMaxDetourMi, forKey: .pickupMaxDetourMi)
     }
 }
 
@@ -124,6 +136,10 @@ public struct OfferRecord: Codable, Identifiable, Equatable, Hashable {
     public var dropoffLocation: Coord?
     /// True when the dropoff was worked out from the DoorDash map (approximate).
     public var dropoffEstimated: Bool?
+    /// Extra miles to fit the offer's store into your route (worst store for batches), and extra miles the
+    /// whole order adds (dropoff check). For the Insights detour charts.
+    public var pickupDetourMi: Double?
+    public var dropoffDetourMi: Double?
 
     public init(id: UUID = UUID(), date: Date = Date(), app: GigApp, pay: Double, miles: Double?, minutes: Int?,
                 pickupText: String?, dropoffText: String?, grade: String, category: OfferCategory,

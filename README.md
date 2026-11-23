@@ -27,6 +27,25 @@ The app reads gig offers live from your screen through iOS screen broadcasting (
 
 > The Offers log, screenshots and timer are shared between the screen reader and the app through the App Group. With a free Apple ID (Sideloadly) iOS may strip the App Group; if the Offers tab stays empty while banners still appear, that's why. TestFlight fixes it.
 
+## Version 5.9: detour charts in Insights
+
+At the top of Insights (follows the period you pick): offers by detour, pay per mile by detour, and % accepted
+by detour, each split 🛍 Pickup / 🏠 Dropoff, in 1-mile steps from 0–1 to 5+ mi, plus plain-English takeaways.
+Each graded offer now saves its pickup detour (worst store's extra miles) and dropoff detour (extra miles the
+order adds). Run the 5.9 lines at the bottom of `supabase/setup.sql` before installing. Only offers graded on
+5.9 or later have detour numbers.
+
+5.9.1: dashed lines on every detour chart show your current limits (🛍 ON THE WAY limit, 🏠 max extra miles)
+and the $/mi chart shows your good/fair $/mi. They follow your Home settings the next time you open Insights.
+
+## Version 5.8: pickup route check + batch offers
+
+- **🛍 Pickup check:** each of the offer's stores is compared with **every pickup in your route** (or with you when the route has no pickups). ✅ CLOSE BY: within 1.0 mi of a route pickup; ⚠️ ON THE WAY: fitting it in adds 1.5 mi or less; ❌ OFF ROUTE: adds more than that. With several stores, the banner shows the **worst** one.
+- **🏠 Dropoff check:** unchanged; for batch offers the "+ miles" covers all of the offer's stops.
+- **One banner item** with both: "🛍 ✅ 0.3 mi from Chipotle · 🏠 ⚠️ +1.2 mi". DoorDash: shown after you tap the customer pin, as before. "?" = couldn't locate; "≈" = placed from the map; "(+1 not checked)" = a store the card/map showed but couldn't be placed.
+- **Batch offers:** every store listed on the card is read and looked up (confirmed). Stores and customers that aren't on the card are placed from their map pins (estimates), using your blue dot plus a confirmed store to line the map up.
+- Home → "Stacking another offer" is split into **🛍 Pickups** (Close by 1.0 mi, On the way +1.5 mi) and **🏠 Dropoffs**.
+
 ## Version 5.6.1
 
 - Navigate sends each stop to Google Maps as its address text (no name) instead of a map point, so Google goes to the exact address rather than the building next door. Stops without a saved address still use their pin.

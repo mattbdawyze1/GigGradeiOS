@@ -62,3 +62,9 @@ create index if not exists missed_offers_date on public.missed_offers (date);
 alter table public.missed_offers enable row level security;
 grant all on public.missed_offers to service_role;
 notify pgrst, 'reload schema';
+
+-- Version 5.9: detour numbers for the Insights charts
+alter table public.offers
+  add column if not exists pickup_detour_mi double precision,
+  add column if not exists dropoff_detour_mi double precision;
+notify pgrst, 'reload schema';

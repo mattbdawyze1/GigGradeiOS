@@ -64,10 +64,19 @@ struct HomeView: View {
                 }
 
                 Section {
+                    numberRow("Close by if the store is within (mi) of any pickup in your route", $s.pickupNearMi)
+                    numberRow("On the way if fitting the store in adds no more than (mi)", $s.pickupMaxDetourMi)
+                } header: {
+                    Text("Stacking another offer · 🛍 Pickups")
+                } footer: {
+                    Text("CLOSE BY ✅: the store is near a pickup already in your route (or near you when your route has no pickups). ON THE WAY ⚠️: only a small detour. Otherwise OFF ROUTE ❌. With several stores, the banner shows the worst one.")
+                }
+
+                Section {
                     numberRow("On the way if it ends within (mi) of your final stop", $s.onTheWayRadiusMi)
                     numberRow("Close by if it adds no more than (mi)", $s.maxDetourMi)
                 } header: {
-                    Text("Stacking another offer")
+                    Text("Stacking another offer · 🏠 Dropoffs")
                 } footer: {
                     Text("ON THE WAY: ends near your final stop (or near you when your route is empty). CLOSE BY: only a small detour. Otherwise OFF ROUTE.")
                 }
@@ -180,7 +189,11 @@ struct NotificationSettingsView: View {
         let o = Offer(app: .uber, pay: 10.06, miles: 9.0, minutes: 33, pickupText: nil, dropoffText: nil, rawText: "")
         return OfferAlert.content(o, OfferScorer.score(o, settings), settings, prefs,
                                   TripPlanner.OnTheWay(verdict: .nearFinal, addedMiles: 3.1, dropoffToFinalMi: 1.3),
-                                  dropoff: DropoffInfo(place: "Smithtown Byp, Smithtown", estimated: false, milesFromYou: 6.2))
+                                  dropoff: DropoffInfo(place: "Smithtown Byp, Smithtown", estimated: false, milesFromYou: 6.2),
+                                  pickupCheck: PickupCheck(stores: [PickupCheck.Store(level: .near, nearestMi: 0.3,
+                                                                                      nearestName: "Chipotle", detourMi: 0.2,
+                                                                                      estimated: false)],
+                                                           unchecked: 0))
     }
 
     var body: some View {

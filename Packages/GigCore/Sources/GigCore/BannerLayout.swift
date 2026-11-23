@@ -15,7 +15,7 @@ public enum BannerItem: String, Codable, CaseIterable, Identifiable {
         case .miles: return "Miles"
         case .minutes: return "Minutes"
         case .net: return "Pay after costs"
-        case .verdict: return "On the way / Close by / Off route"
+        case .verdict: return "Route check (🛍 pickup · 🏠 dropoff)"
         case .dropoff: return "Dropoff location"
         }
     }
