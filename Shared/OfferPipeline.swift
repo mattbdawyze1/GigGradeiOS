@@ -169,11 +169,33 @@ final class OfferPipeline {
         // 2) Locate pickup/dropoff (text first, map as backup and cross-check), run the check, post.
         Task {
             let near = store.currentLocation
-            var pickupCoord = await PlaceFinder.find(offer.pickupText, near: near)
-            if pickupCoord == nil, let name = offer.pickupText, let town = PlaceFinder.town(in: offer.dropoffText) {
-                pickupCoord = await PlaceFinder.find("\(name), \(town)", near: near) // name-only stores
+            var pickupCoord: Coord?
+            if offer.app == .uber {
+                // Uber: every search result is checked (name, distance vs. the trip's miles, house number + street).
+                let found = await PlaceFinder.findStore(offer.pickupText, near: near, tripMiles: offer.miles,
+                                                        town: PlaceFinder.town(in: offer.dropoffText))
+                pickupCoord = found.coord
+                if found.notable {
+                    self.noteIssue(key, .storeLookup, "“\(offer.pickupText ?? "")”: " + found.notes.joined(separator: "; "))
+                }
+            } else {
+                pickupCoord = await PlaceFinder.find(offer.pickupText, near: near)
+                if pickupCoord == nil, let name = offer.pickupText, let town = PlaceFinder.town(in: offer.dropoffText) {
+                    pickupCoord = await PlaceFinder.find("\(name), \(town)", near: near) // name-only stores
+                }
             }
-            var dropoffCoord = await PlaceFinder.find(offer.dropoffText, near: near)
+            var dropoffCoord: Coord?
+            if offer.app == .uber {
+                // Uber: every result must be on the card's street(s) and within the trip's miles (5.9.6.4).
+                let found = await PlaceFinder.findCustomer(offer.dropoffText, near: near, store: pickupCoord,
+                                                           tripMiles: offer.miles)
+                dropoffCoord = found.coord
+                if found.notable {
+                    self.noteIssue(key, .customerLookup, "“\(offer.dropoffText ?? "")”: " + found.notes.joined(separator: "; "))
+                }
+            } else {
+                dropoffCoord = await PlaceFinder.find(offer.dropoffText, near: near)
+            }
             var estimated = false
             var streets: String?
 
@@ -574,7 +596,8 @@ final class OfferPipeline {
     // MARK: Issues log (5.9.6.2): anything that went wrong on a read offer, one entry per offer, kept up to date
 
     enum IssueKind: String {
-        case verdictChanged, textMapDisagree, storeNotFound, customerNotFound, mapUnreadable, multipleMatches, noVerdictInTime
+        case verdictChanged, textMapDisagree, storeNotFound, customerNotFound, mapUnreadable, multipleMatches, noVerdictInTime,
+             storeLookup, customerLookup
         var title: String {
             switch self {
             case .verdictChanged: return "Verdict changed after the banner"
@@ -584,6 +607,8 @@ final class OfferPipeline {
             case .mapUnreadable: return "Map couldn't be read"
             case .multipleMatches: return "Several matches for the tapped address"
             case .noVerdictInTime: return "Banner went out without a verdict"
+            case .storeLookup: return "Store lookup"
+            case .customerLookup: return "Customer lookup"
             }
         }
     }

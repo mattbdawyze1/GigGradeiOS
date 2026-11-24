@@ -193,7 +193,14 @@ public enum OfferParser {
                 if isGray && i > 0 { dropLines.append(line.text) } else if dropLines.isEmpty { storeLines.append(line.text) }
                 else { dropLines.append(line.text) } // anything after the dropoff starts stays with it
             }
-        } else {
+            // 5.9.6.3: Uber's pulsing green circle can tint part of the card and skew the brightness. The customer is
+            // always cross streets or "street, town": if the split left no customer, or put cross streets with the
+            // store, the brightness is ignored and the text decides.
+            if dropLines.isEmpty || storeLines.contains(where: StoreText.looksLikeCrossStreets) {
+                storeLines = []; dropLines = []
+            }
+        }
+        if storeLines.isEmpty && dropLines.isEmpty {
             // b) Text after the store's closing ")" on the same line belongs to the dropoff.
             var texts = block.map(\.text)
             if let i = texts.firstIndex(where: { line in
@@ -217,6 +224,11 @@ public enum OfferParser {
         }
 
         var pickup = storeLines.joined(separator: " ")
+        // "Shahs Halal Food (Selden)": the store's town -> "Shahs Halal Food, Selden" (no digits = a town, not an address)
+        if let rx = try? NSRegularExpression(pattern: #"\(\s*([^()0-9]{3,}?)\s*\)"#) {
+            pickup = rx.stringByReplacingMatches(in: pickup, range: NSRange(pickup.startIndex..., in: pickup), withTemplate: ", $1")
+            pickup = pickup.replacingOccurrences(of: " ,", with: ",")
+        }
         // "Panera (4959 Nesconset Hwy )" -> "Panera 4959 Nesconset Hwy" (better map search)
         pickup = pickup.replacingOccurrences(of: "(", with: " ").replacingOccurrences(of: ")", with: " ")
         pickup = pickup.split(separator: " ").joined(separator: " ")

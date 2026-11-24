@@ -35,6 +35,20 @@ Each graded offer now saves its pickup detour (worst store's extra miles) and dr
 order adds). Run the 5.9 lines at the bottom of `supabase/setup.sql` before installing. Only offers graded on
 5.9 or later have detour numbers.
 
+5.9.6.4 (version 5.9.6, build 5), Uber only: (1) Uber's pulsing green circle can skew the brightness used to tell the
+store line from the customer line; the split is now checked against the text (cross streets always belong to the
+customer). (2) A store's town in parentheses, "Shahs Halal Food (Selden)", is used as the store's town. (3) Customer
+lookup: every result must be on the card's street(s) and within the trip's miles of you and the store; results in the
+card's town are preferred ("Customer lookup" in Issues). DoorDash and
+👓 are unchanged.
+
+5.9.6.3 (version 5.9.6, build 4): Uber store lookup checks every Apple Maps result instead of taking the closest:
+the name must match the card (no lookalikes), the store must be within the offer's total miles of you (no stores in
+another state), and when the card has an address ("Taco Bell (4833 Nesconset Hwy)") the house number and street must
+match; if no listing matches, the address itself is used. Junk read from Uber's little route icon before the store
+name is removed. If nothing passes, the store pin on the map is tried, as before. Notable lookups go to the Issues log
+("Store lookup"). DoorDash, the customer and the radius checks are unchanged.
+
 5.9.6.2 (version 5.9.6, build 3): the Missed button in Offers is now **Issues**. Besides offers that couldn't be
 read, it logs read offers where something went wrong, one entry per offer with a timeline: a verdict that changed
 after the banner (and what moved), Apple Maps and the map's pin more than 1 mi apart, a store or customer that
