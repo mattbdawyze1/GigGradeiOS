@@ -224,25 +224,25 @@ final class OfferPipeline {
 
             var pins = firstPins
             var mapNote = ""
-            if offer.app == .uber {
+            // Uber (5.9.6.9): the text wins whenever it passes the checks; the map is strictly a backup. So the map is
+            // only waited for when the store or the customer couldn't be found from the text.
+            let uberNeedsMap = offer.app == .uber && (pickupCoord == nil || dropoffCoord == nil)
+            if uberNeedsMap {
                 let read = await self.waitForUberMap(key: key, first: firstPins)
                 pins = read.pins
-                if read.reads > 1 {
-                    mapNote = " (\(read.reads) reads over \(String(format: "%.1f", read.seconds)) s"
-                        + (read.combined ? ", combined from several frames" : "") + ")"
-                }
+                mapNote = Self.readNote(read.reads, read.seconds, read.combined)
                 if MapRead.score(pins) < 3, let frame = read.frame,
                    let path = await Cloud.shared.uploadIssueFrame(frame, id: UUID()) {
                     self.setIssueShot(key, path)   // the Issues entry shows the last frame that didn't read fully
                 }
+                let why = [pickupCoord == nil ? "store" : nil, dropoffCoord == nil ? "customer" : nil].compactMap { $0 }
+                mapNote += " — map was needed: the " + why.joined(separator: " and ") + " couldn't be found from the text"
+            } else if offer.app == .uber {
+                // Not needed for this offer, but still read and logged in the background for troubleshooting (5.9.6.10).
+                Task { [weak self] in await self?.logUberMapLater(key: key, first: firstPins) }
             }
-            if offer.app == .uber || offer.app == .doordash {
-                var missing: [String] = []
-                if pins == nil { missing = ["no pins found"] } else if let pins {
-                    if pins.me == nil { missing.append(offer.app == .uber ? "your arrow" : "your blue dot") }
-                    if pins.stores.isEmpty { missing.append("store pin") }
-                    if pins.customers.isEmpty { missing.append("customer pin") }
-                }
+            if uberNeedsMap || offer.app == .doordash {
+                let missing = Self.missingParts(pins, app: offer.app)
                 if !missing.isEmpty {
                     self.noteIssue(key, .mapUnreadable, "missing " + missing.joined(separator: ", ") + " on the offer map" + mapNote)
                 }
@@ -260,14 +260,15 @@ final class OfferPipeline {
                 if let me = store.currentLocation {
                     if let pc = pickupCoord,
                        let est = MapLocator.locate(pins: pins, me: me, store: pc, statedMiles: offer.miles) {
-                        // Use the map when there's no dropoff address, or when the address lookup landed
-                        // far from where the map's pin actually is (wrong match).
-                        if let dc = dropoffCoord, Geo.straightMiles(dc, est.finalDropoff) > 1.0 {
+                        // Use the map when there's no dropoff address, or (not Uber) when the address lookup landed
+                        // far from where the map's pin actually is (wrong match). Uber: a checked text result always wins.
+                        let mapMayOverride = offer.app != .uber
+                        if mapMayOverride, let dc = dropoffCoord, Geo.straightMiles(dc, est.finalDropoff) > 1.0 {
                             self.noteIssue(key, .textMapDisagree, String(format:
                                 "Apple Maps put the customer (“%@”) %.1f mi from the map's customer pin; used the pin",
                                 offer.dropoffText ?? "?", Geo.straightMiles(dc, est.finalDropoff)))
                         }
-                        if dropoffCoord == nil || Geo.straightMiles(dropoffCoord!, est.finalDropoff) > 1.0 {
+                        if dropoffCoord == nil || (mapMayOverride && Geo.straightMiles(dropoffCoord!, est.finalDropoff) > 1.0) {
                             dropoffCoord = est.finalDropoff
                             estimated = true
                         }
@@ -696,6 +697,32 @@ final class OfferPipeline {
             mapReads[key] = r2
         }
         lock.unlock()
+    }
+
+    static func missingParts(_ pins: MapPins?, app: GigApp) -> [String] {
+        guard let pins else { return ["no pins found"] }
+        var missing: [String] = []
+        if pins.me == nil { missing.append(app == .uber ? "your arrow" : "your blue dot") }
+        if pins.stores.isEmpty { missing.append("store pin") }
+        if pins.customers.isEmpty { missing.append("customer pin") }
+        return missing
+    }
+
+    static func readNote(_ reads: Int, _ seconds: Double, _ combined: Bool) -> String {
+        guard reads > 1 else { return "" }
+        return " (\(reads) reads over \(String(format: "%.1f", seconds)) s" + (combined ? ", combined from several frames" : "") + ")"
+    }
+
+    /// Uber offer whose store and customer were both found from the text: the map isn't used, but it's still read
+    /// (same 3 s of frames) and a "Map couldn't be read" entry is logged if it didn't read fully, marked as not needed.
+    private func logUberMapLater(key: String, first: MapPins?) async {
+        let read = await waitForUberMap(key: key, first: first)
+        let missing = Self.missingParts(read.pins, app: .uber)
+        guard !missing.isEmpty else { return }
+        if let frame = read.frame, let path = await Cloud.shared.uploadIssueFrame(frame, id: UUID()) { setIssueShot(key, path) }
+        noteIssue(key, .mapUnreadable, "missing " + missing.joined(separator: ", ") + " on the offer map"
+                  + Self.readNote(read.reads, read.seconds, read.combined)
+                  + " — map wasn't needed: the store and customer were found from the text")
     }
 
     /// Waits (up to 3 s after the offer was confirmed) for a frame where Uber's map reads fully.

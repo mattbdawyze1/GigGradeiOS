@@ -35,6 +35,15 @@ Each graded offer now saves its pickup detour (worst store's extra miles) and dr
 order adds). Run the 5.9 lines at the bottom of `supabase/setup.sql` before installing. Only offers graded on
 5.9 or later have detour numbers.
 
+5.9.6.10 (version 5.9.6, build 11): Uber's map is still read on every offer for troubleshooting, in the background when
+it isn't needed (so banners don't wait). "Map couldn't be read" entries now say whether the map was needed (the store
+or customer couldn't be found from the text) or not.
+
+5.9.6.9 (version 5.9.6, build 10), Uber: the text always wins when it passes the checks; the map is strictly a backup.
+The map no longer overrides a checked customer result (the old "more than 1 mi from the pin" rule), and the app only
+waits for Uber's map (and only logs "Map couldn't be read") when the store or the customer couldn't be found from the
+text. DoorDash unchanged.
+
 5.9.6.8 (version 5.9.6, build 9): frames are combined only when the map picture matches AND a store or customer pin
 found in both frames is in the same spot (within 15 px), which proves the map didn't move. Your arrow doesn't count as
 proof, since it moves while you drive.
