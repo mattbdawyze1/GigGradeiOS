@@ -72,13 +72,81 @@ enum UberMapDetector {
 
         let pickups = blobs(green, gw, gh).filter { isPin($0) && notUnderBanner($0) }.map(anchor)
         let dropoffs = blobs(light ? black : pale, gw, gh).filter { isPin($0) && notUnderBanner($0) }.map(anchor)
-        let pucks = blobs(light ? black : veryBlack, gw, gh)
-            .filter { isPuck($0, solid: !light) && notUnderBanner($0) }
-            .sorted { $0.n > $1.n }
-            .map(center)
+        // You. Light map (5.9.6.5): find the small black arrowhead inside a white circle ringed in black. Looking for
+        // the ring itself failed when Uber's route line touched it (the route's black outline merged with the ring,
+        // and a bend in the route was taken for you). Dark map: unchanged.
+        func lum(_ gx: Int, _ gy: Int) -> Int? {
+            guard gx >= 0, gy >= 0, gx < gw, gy < gh else { return nil }
+            let c = rgb[gy * gw + gx]
+            return (2126 * c.0 + 7152 * c.1 + 722 * c.2) / 10000
+        }
+        func arrowScore(_ b: Blob) -> Int? {
+            let w = Double(b.w), h = Double(b.h)
+            guard w > 0.25 * pinW, w < 0.75 * pinW, h > 0.25 * pinW, h < 0.75 * pinW,
+                  Double(b.n) > 0.25 * w * h, Double(b.n) < 0.75 * w * h else { return nil }
+            let cx = Double(b.x0 + b.x1) / 2, cy = Double(b.y0 + b.y1) / 2, size = max(w, h)
+            var white = 0, ring = 0
+            for k in 0..<36 {
+                let t = 2 * Double.pi * Double(k) / 36
+                var seenWhite = false, seenRing = false
+                var r = 0.55 * size
+                while r < 1.45 * size {
+                    guard let v = lum(Int((cx + r * cos(t)).rounded()), Int((cy + r * sin(t)).rounded())) else { break }
+                    if !seenWhite { if r < size && v > 200 { seenWhite = true } }
+                    else if v < 70 { seenRing = true; break }
+                    r += 0.5
+                }
+                if seenWhite { white += 1 }
+                if seenRing { ring += 1 }
+            }
+            guard Double(white) / 36 > 0.75, Double(ring) / 36 > 0.6 else { return nil }
+            return white + ring
+        }
+        let pucks: [MapPins.Point]
+        if light {
+            pucks = blobs(black, gw, gh)
+                .filter(notUnderBanner)
+                .compactMap { b in arrowScore(b).map { (b, $0) } }
+                .sorted { $0.1 > $1.1 }
+                .map { center($0.0) }
+        } else {
+            pucks = blobs(veryBlack, gw, gh)
+                .filter { isPuck($0, solid: true) && notUnderBanner($0) }
+                .sorted { $0.n > $1.n }
+                .map(center)
+        }
 
-        guard !pickups.isEmpty || !dropoffs.isEmpty else { return nil }
-        return MapPins(me: pucks.first, stores: pickups, customers: dropoffs)
+        // 5.9.6.6: a frame with only some of the three is still returned; frames of the same view are combined.
+        guard !pickups.isEmpty || !dropoffs.isEmpty || !pucks.isEmpty else { return nil }
+
+        // The map view's picture: average brightness in 12 x 16 cells, below where banners show (top 24%).
+        let sy0 = max(0, Int(Double(H) * 0.24) / step - gy0)
+        let sx = 12, sy = 16
+        var signature: [UInt8] = []
+        signature.reserveCapacity(sx * sy)
+        if gh > sy0 + sy {
+            for j in 0..<sy {
+                let ya = sy0 + j * (gh - sy0) / sy, yb = sy0 + (j + 1) * (gh - sy0) / sy
+                for i in 0..<sx {
+                    let xa = i * gw / sx, xb = (i + 1) * gw / sx
+                    var sum = 0, n = 0
+                    var yy = ya
+                    while yy < yb {
+                        var xx = xa
+                        while xx < xb {
+                            let c = rgb[yy * gw + xx]
+                            sum += (2126 * c.0 + 7152 * c.1 + 722 * c.2) / 10000
+                            n += 1
+                            xx += 2
+                        }
+                        yy += 2
+                    }
+                    signature.append(UInt8(max(0, min(255, n > 0 ? sum / n : 0))))
+                }
+            }
+        }
+        return MapPins(me: pucks.first, stores: pickups, customers: dropoffs,
+                       signature: signature.isEmpty ? nil : signature)
     }
 
     /// 8-connected groups of true cells, as bounding boxes + counts.

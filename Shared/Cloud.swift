@@ -414,14 +414,22 @@ actor Cloud {
     /// One entry per read offer where something went wrong, rewritten as more happens (5.9.6.2).
     /// The screenshot is the offer's own (screenshots/offers/...), uploaded with the offer.
     func reportIssue(id: UUID, offerId: UUID, date: Date, headline: String, details: String, text: String,
-                     screenshotFile: String?) async {
+                     screenshotPath: String?) async {
         guard Self.isConfigured else { return }
         let row = MissedRow(id: id, date: date, reason: headline, ocr_text: String(text.prefix(4000)),
-                            screenshot_path: screenshotFile.map { "\(Self.folder)/\($0)" },
+                            screenshot_path: screenshotPath,
                             kind: "issue", offer_id: offerId, details: details)
         _ = try? await send("POST", "/rest/v1/missed_offers", query: [URLQueryItem(name: "on_conflict", value: "id")],
                             body: try Self.encoder.encode([row]),
                             headers: ["Prefer": "resolution=merge-duplicates,return=minimal"])
+    }
+
+    /// A frame for an Issues entry (Uber map that didn't read fully), stored next to the missed-offer screenshots.
+    func uploadIssueFrame(_ jpeg: Data, id: UUID) async -> String? {
+        guard Self.isConfigured else { return nil }
+        let p = "missed/issue-\(id.uuidString).jpg"
+        return (try? await send("POST", "/storage/v1/object/screenshots/\(p)", body: jpeg,
+                                contentType: "image/jpeg", headers: ["x-upsert": "true"])) != nil ? p : nil
     }
 
     struct OfferBrief: Decodable {
@@ -489,7 +497,9 @@ actor Cloud {
     func deleteMissed(_ row: MissedRow) async {
         _ = try? await send("DELETE", "/rest/v1/missed_offers", query: [URLQueryItem(name: "id", value: "eq.\(row.id.uuidString)")])
         // An issue entry shows the offer's own screenshot: keep it (it belongs to the offer).
-        if let p = row.screenshot_path, !row.isIssue { _ = try? await send("DELETE", "/storage/v1/object/screenshots/\(p)") }
+        if let p = row.screenshot_path, !row.isIssue || p.hasPrefix("missed/") {
+            _ = try? await send("DELETE", "/storage/v1/object/screenshots/\(p)")
+        }
     }
 
     func missedScreenshot(_ path: String) async -> Data? {

@@ -37,6 +37,7 @@ final class OfferPipeline {
     }
     private var batches: [String: Batch] = [:]
     private var trails: [String: Trail] = [:]
+    private var mapReads: [String: MapRead] = [:]
     private func batch(_ key: String) -> Batch? { lock.lock(); defer { lock.unlock() }; return batches[key] }
 
     /// Last time an offer (readable or not) was on screen. 👓 ends its reading when an offer shows up after the press.
@@ -131,7 +132,10 @@ final class OfferPipeline {
         lock.unlock()
         if needShot, let jpeg = screenshot?() { lock.lock(); episodeShot = jpeg; lock.unlock() }
         if !shouldAlert {
-            if sameOfferStillUp, let up = currentKey { retryIfNeeded(key: up, lines: lines, mapPins: mapPins, now: now) }
+            if sameOfferStillUp, let up = currentKey {
+                feedUberMap(key: up, mapPins: mapPins, screenshot: screenshot, now: now)
+                retryIfNeeded(key: up, lines: lines, mapPins: mapPins, now: now)
+            }
             return
         }
 
@@ -144,8 +148,16 @@ final class OfferPipeline {
                                  pickupText: offer.pickupText, dropoffText: offer.dropoffText, grade: score.grade,
                                  category: score.category, dollarsPerHour: score.dollarsPerHour,
                                  dollarsPerMile: score.dollarsPerMile)
-        if let jpeg = screenshot?() { record.screenshotFile = log.saveScreenshot(jpeg, id: record.id) }
-        let pins: MapPins? = mapPins?(offer.app)
+        let firstFrame = screenshot?()
+        if let jpeg = firstFrame { record.screenshotFile = log.saveScreenshot(jpeg, id: record.id) }
+        let firstPins: MapPins? = mapPins?(offer.app)
+        if offer.app == .uber {
+            // Uber: if this frame doesn't show all three (store, customer, you), the next frames are read too (5.9.6.5).
+            lock.lock()
+            mapReads = [key: MapRead(start: now, best: firstPins, lastTry: now,
+                                     lastFrame: MapRead.score(firstPins) == 3 ? nil : firstFrame)]
+            lock.unlock()
+        }
         log.append(record)
         let dayKey = OfferLog.dayKey(record.date)
         Task { await Cloud.shared.queueOffer(id: record.id, dayKey: dayKey) }
@@ -210,6 +222,20 @@ final class OfferPipeline {
             }
             var batch = Batch(stores: knownStores.map { (coord: $0, estimated: false) }, customers: [], unchecked: 0)
 
+            var pins = firstPins
+            var mapNote = ""
+            if offer.app == .uber {
+                let read = await self.waitForUberMap(key: key, first: firstPins)
+                pins = read.pins
+                if read.reads > 1 {
+                    mapNote = " (\(read.reads) reads over \(String(format: "%.1f", read.seconds)) s"
+                        + (read.combined ? ", combined from several frames" : "") + ")"
+                }
+                if MapRead.score(pins) < 3, let frame = read.frame,
+                   let path = await Cloud.shared.uploadIssueFrame(frame, id: UUID()) {
+                    self.setIssueShot(key, path)   // the Issues entry shows the last frame that didn't read fully
+                }
+            }
             if offer.app == .uber || offer.app == .doordash {
                 var missing: [String] = []
                 if pins == nil { missing = ["no pins found"] } else if let pins {
@@ -218,7 +244,7 @@ final class OfferPipeline {
                     if pins.customers.isEmpty { missing.append("customer pin") }
                 }
                 if !missing.isEmpty {
-                    self.noteIssue(key, .mapUnreadable, "missing " + missing.joined(separator: ", ") + " on the offer map")
+                    self.noteIssue(key, .mapUnreadable, "missing " + missing.joined(separator: ", ") + " on the offer map" + mapNote)
                 }
             }
             let pickupFromText = pickupCoord != nil
@@ -620,6 +646,70 @@ final class OfferPipeline {
         var events: [String] = []
         var kinds: [IssueKind] = []
         var lastPosted: (marks: String, summary: String, pickup: Coord?, dropoff: Coord?, source: String)?
+        var shotPath: String?        // nil = the offer's own screenshot
+    }
+
+    private func setIssueShot(_ key: String, _ path: String) {
+        lock.lock(); trails[key]?.shotPath = path; lock.unlock()
+    }
+
+    // MARK: Uber map: keep reading frames until the store, the customer and you are all found (5.9.6.5)
+
+    private struct MapRead {
+        let start: Date
+        var best: MapPins?
+        var reads = 1
+        var lastTry: Date
+        var lastFrame: Data?       // last frame that didn't read fully (for the Issues log)
+        var combined = false       // parts taken from more than one frame
+        static func score(_ p: MapPins?) -> Int {
+            guard let p else { return 0 }
+            return (p.me != nil ? 1 : 0) + (p.stores.isEmpty ? 0 : 1) + (p.customers.isEmpty ? 0 : 1)
+        }
+        var complete: Bool { Self.score(best) == 3 }
+    }
+
+    /// Called for each new frame while the offer is up: reads Uber's map again (every ½ s, for 3 s) until it's complete.
+    private func feedUberMap(key: String, mapPins: ((GigApp) -> MapPins?)?, screenshot: (() -> Data?)?, now: Date) {
+        lock.lock()
+        guard var r = mapReads[key], !r.complete, now.timeIntervalSince(r.start) <= 3,
+              now.timeIntervalSince(r.lastTry) >= 0.5 else { lock.unlock(); return }
+        r.lastTry = now
+        mapReads[key] = r
+        lock.unlock()
+        let p = mapPins?(.uber)   // must run now, while this frame is still here
+        let frame = MapRead.score(p) == 3 ? nil : screenshot?()
+        lock.lock()
+        if var r2 = mapReads[key] {
+            r2.reads += 1
+            if let p, let b = r2.best, MapPins.sameView(b.signature, p.signature), b.sharesPin(with: p) {
+                // Same map view (the picture matches AND a store or customer pin is in the same spot in both frames):
+                // fill in what's still missing from this frame.
+                let m = b.merged(with: p)
+                if MapRead.score(m) > MapRead.score(b) { r2.combined = true }
+                r2.best = m
+            } else if MapRead.score(p) >= MapRead.score(r2.best) {
+                r2.best = p   // the map moved (or nothing yet): start over from this newer view
+                r2.combined = false
+            }
+            if let frame { r2.lastFrame = frame }
+            mapReads[key] = r2
+        }
+        lock.unlock()
+    }
+
+    /// Waits (up to 3 s after the offer was confirmed) for a frame where Uber's map reads fully.
+    private func waitForUberMap(key: String, first: MapPins?) async
+        -> (pins: MapPins?, reads: Int, seconds: Double, frame: Data?, combined: Bool) {
+        while true {
+            lock.lock(); let r = mapReads[key]; lock.unlock()
+            guard let r else { return (first, 1, 0, nil, false) }
+            let elapsed = Date().timeIntervalSince(r.start)
+            if r.complete || elapsed >= 3 || currentKey != key {
+                return (r.best, r.reads, min(elapsed, 3), r.complete ? nil : r.lastFrame, r.combined)
+            }
+            try? await Task.sleep(nanoseconds: 200_000_000)
+        }
     }
 
     private func startTrail(key: String, record: OfferRecord, text: String) {
@@ -639,7 +729,8 @@ final class OfferPipeline {
         let details = t.events.joined(separator: "\n")
         Task {
             await Cloud.shared.reportIssue(id: t.id, offerId: t.record.id, date: t.record.date, headline: headline,
-                                           details: details, text: t.text, screenshotFile: t.record.screenshotFile)
+                                           details: details, text: t.text,
+                                           screenshotPath: t.shotPath ?? t.record.screenshotFile.map { "offers/\($0)" })
         }
     }
 

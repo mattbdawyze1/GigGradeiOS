@@ -11,8 +11,36 @@ public struct MapPins: Equatable {
     public var me: Point?          // blue GPS dot
     public var stores: [Point]     // store-icon pins
     public var customers: [Point]  // person-icon pins
-    public init(me: Point?, stores: [Point], customers: [Point]) {
-        self.me = me; self.stores = stores; self.customers = customers
+    /// A tiny brightness picture of the map (Uber), to tell whether two frames show the same map view.
+    public var signature: [UInt8]?
+    public init(me: Point?, stores: [Point], customers: [Point], signature: [UInt8]? = nil) {
+        self.me = me; self.stores = stores; self.customers = customers; self.signature = signature
+    }
+
+    /// Two frames show the same map view (it didn't pan or zoom in between): their pictures nearly match.
+    public static func sameView(_ a: [UInt8]?, _ b: [UInt8]?, tolerance: Double = 6) -> Bool {
+        guard let a, let b, a.count == b.count, !a.isEmpty else { return false }
+        let diff = zip(a, b).reduce(0) { $0 + abs(Int($1.0) - Int($1.1)) }
+        return Double(diff) / Double(a.count) < tolerance
+    }
+
+    /// Proof the map didn't move between two frames (5.9.6.8): a store or customer pin found in both is in the same
+    /// spot, within `tolerance` pixels. Your arrow doesn't count, since it moves when you drive.
+    public func sharesPin(with other: MapPins, tolerance: Double = 15) -> Bool {
+        func near(_ a: [Point], _ b: [Point]) -> Bool {
+            a.contains { p in b.contains { q in ((p.x - q.x) * (p.x - q.x) + (p.y - q.y) * (p.y - q.y)).squareRoot() <= tolerance } }
+        }
+        return near(stores, other.stores) || near(customers, other.customers)
+    }
+
+    /// Fills in what this read is missing (the store pins, the customer pins) from a newer frame of the same view.
+    /// Your arrow always comes from the newest frame that shows it, since you may be driving (5.9.6.7).
+    public func merged(with newer: MapPins) -> MapPins {
+        let other = newer
+        return MapPins(me: other.me ?? me,
+                stores: stores.isEmpty ? other.stores : stores,
+                customers: customers.isEmpty ? other.customers : customers,
+                signature: signature)
     }
 }
 

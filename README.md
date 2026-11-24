@@ -35,6 +35,25 @@ Each graded offer now saves its pickup detour (worst store's extra miles) and dr
 order adds). Run the 5.9 lines at the bottom of `supabase/setup.sql` before installing. Only offers graded on
 5.9 or later have detour numbers.
 
+5.9.6.8 (version 5.9.6, build 9): frames are combined only when the map picture matches AND a store or customer pin
+found in both frames is in the same spot (within 15 px), which proves the map didn't move. Your arrow doesn't count as
+proof, since it moves while you drive.
+
+5.9.6.7 (version 5.9.6, build 8): when frames are combined, your arrow always comes from the newest frame that
+shows it (you may be driving); the store and customer pins, which don't move, are kept from whichever frame found them.
+
+5.9.6.6 (version 5.9.6, build 7), Uber map only: the map can be put together from several frames. Each read keeps a
+tiny picture of the map view; frames whose pictures match (the map didn't pan or zoom) are combined, so you can come
+from one frame, the store pin from another and the customer pin from a third. If the map moved, it starts over from
+the newer view.
+
+5.9.6.5 (version 5.9.6, build 6), Uber map only: (1) your arrow is found by the arrowhead inside its white circle and
+black ring, so the route line touching the arrow no longer hides it or gets taken for you (tested on 15 of your
+screenshots: all correct, including the Taco Bell one the old way got wrong). (2) If the first frame doesn't show the
+store, the customer and you, the next frames are read too (every ½ s, up to 3 s after the offer is confirmed, inside
+the banner window). If it never reads fully, the Issues entry says how many reads were tried and shows the last
+frame that didn't read.
+
 5.9.6.4 (version 5.9.6, build 5), Uber only: (1) Uber's pulsing green circle can skew the brightness used to tell the
 store line from the customer line; the split is now checked against the text (cross streets always belong to the
 customer). (2) A store's town in parentheses, "Shahs Halal Food (Selden)", is used as the store's town. (3) Customer
