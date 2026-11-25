@@ -26,6 +26,29 @@ public enum StoreText {
 
     /// Splits off a house number + street. Uber's parentheses were already turned into spaces by the parser.
     public static func split(_ raw: String) -> Parts {
+        var p = splitAddress(raw)
+        // 5.9.6.11, from your Issues log. "Bango - Happauge", "Ditch - Port Jefferson 140 Main Street": the part after
+        // " - " is where the store is. "LOWE'S OF STONY BROOK", "MEET NOODLE OF STONYBROOK": the town follows a capital OF.
+        if p.town == nil {
+            for sep in [" - ", " OF "] {
+                guard let r = p.name.range(of: sep) else { continue }
+                let left = p.name[..<r.lowerBound].trimmingCharacters(in: .whitespaces)
+                let right = p.name[r.upperBound...].trimmingCharacters(in: CharacterSet(charactersIn: " ."))
+                if !left.isEmpty, right.count >= 3, right.first?.isLetter == true {
+                    p.name = left; p.town = right
+                    break
+                }
+            }
+        }
+        return p
+    }
+
+    static func splitAddress(_ raw: String) -> Parts {
+        // ", NY" at the end is the state, not a town ("Naz's Halal Food, Brentwood, NY", "LOWE'S OF COMMACK, NY").
+        var raw = raw
+        if let rx = try? NSRegularExpression(pattern: #",\s*[A-Z]{2}\.?\s*$"#) {
+            raw = rx.stringByReplacingMatches(in: raw, range: NSRange(raw.startIndex..., in: raw), withTemplate: "")
+        }
         let text = clean(raw).replacingOccurrences(of: "(", with: " ").replacingOccurrences(of: ")", with: " ")
         let words = text.split(separator: " ").map(String.init)
         for (i, w) in words.enumerated() where i > 0 {
@@ -35,6 +58,12 @@ public enum StoreText {
             // Street = words after the number, up to a comma / store ID ("NY - 1330").
             var street: [String] = []
             for s in words[(i + 1)...] {
+                // "Route 111", "Hwy 25A": a number right after a route word is part of the street.
+                if let last = street.last?.lowercased(), ["route", "rte", "rt", "hwy", "highway", "cr"].contains(last),
+                   s.first?.isNumber == true {
+                    street.append(s.trimmingCharacters(in: CharacterSet(charactersIn: ",.")))
+                    continue
+                }
                 if s == "-" || s.allSatisfy(\.isNumber) { break }
                 if s.count == 2, s == s.uppercased(), s.allSatisfy(\.isLetter), !street.isEmpty,
                    !streetWords.contains(s.lowercased()) { break } // state code
@@ -58,7 +87,9 @@ public enum StoreText {
     }
 
     /// "Fireside Ln & Lodge Ln, East Setauket" yes; "Ben & Jerry's" no (no street word or town after the "&").
-    public static func looksLikeCrossStreets(_ line: String) -> Bool {
+    public static func looksLikeCrossStreets(_ raw: String) -> Bool {
+        // A store's address in parentheses doesn't count: "Tex's Chicken & Burgers (272 E Main St)".
+        let line = raw.replacingOccurrences(of: #"\([^)]*\)?"#, with: " ", options: .regularExpression)
         guard let amp = line.firstIndex(of: "&") else { return false }
         let after = line[line.index(after: amp)...]
         if after.contains(",") { return true }
@@ -105,12 +136,26 @@ public enum StoreText {
     /// name (plurals allowed; one word may be missing for names of 3+ words). "Sizzlin' Chicken" ≠ "Chicken Shack",
     /// "Wingstop" ≠ "Wing Zone". Spacing differences are fine: "PJ Sushi" = "P J Sushi".
     public static func nameMatches(card: String, place: String) -> Bool {
-        let a = tokens(card), b = Set(tokens(place))
+        // Store numbers don't count: "IHOP 3806", "HOME DEPOT 1265" (5.9.6.11).
+        let allCard = tokens(card)
+        let a = allCard.filter { !$0.allSatisfy(\.isNumber) }.isEmpty ? allCard : allCard.filter { !$0.allSatisfy(\.isNumber) }
+        let placeTokens = tokens(place).filter { !$0.allSatisfy(\.isNumber) }
+        let b = Set(placeTokens)
         guard !a.isEmpty, !b.isEmpty else { return false }
-        if a.joined() == tokens(place).joined() { return true }
-        let hits = a.filter { w in b.contains { $0 == w || $0 == w + "s" || w == $0 + "s" } }.count
-        return hits == a.count || (a.count >= 3 && hits >= a.count - 1)
+        func same(_ x: String, _ y: String) -> Bool { x == y || x == y + "s" || y == x + "s" }
+        if a.joined() == placeTokens.joined() { return true }
+        let hits = a.filter { w in b.contains { same($0, w) } }.count
+        if hits == a.count || (a.count >= 3 && hits >= a.count - 1) { return true }
+        // Apple's listing is a shorter name that appears in the card's name: "Starbucks Stony Brook 347" = "Starbucks",
+        // "Central Pizza & Italian Restaurant" = "Central Pizza". Not for a single generic word ("Sushi", "Pizza").
+        let distinctive = placeTokens.count >= 2 || (placeTokens.count == 1 && placeTokens[0].count >= 5
+                                                     && !genericWords.contains(placeTokens[0]))
+        return distinctive && placeTokens.allSatisfy { w in a.contains { same($0, w) } }
     }
+
+    static let genericWords: Set<String> = ["pizza", "pizzeria", "sushi", "deli", "cafe", "grill", "bagel", "bagels",
+        "bakery", "chinese", "thai", "kitchen", "diner", "market", "burger", "burgers", "tacos", "taco", "wings", "halal",
+        "food", "foods", "express", "coffee", "bistro", "pasta", "chicken", "steak", "seafood", "noodle", "noodles"]
 
     static let streetAbbrev: [String: String] = [
         "street": "st", "road": "rd", "avenue": "ave", "highway": "hwy", "boulevard": "blvd", "drive": "dr",

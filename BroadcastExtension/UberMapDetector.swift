@@ -71,7 +71,58 @@ enum UberMapDetector {
         }
 
         let pickups = blobs(green, gw, gh).filter { isPin($0) && notUnderBanner($0) }.map(anchor)
-        let dropoffs = blobs(light ? black : pale, gw, gh).filter { isPin($0) && notUnderBanner($0) }.map(anchor)
+        var dropoffs = blobs(light ? black : pale, gw, gh).filter { isPin($0) && notUnderBanner($0) }.map(anchor)
+
+        // Light map (5.9.6.11): on full-resolution frames the customer pin's square touches Uber's dark route line, so
+        // pin + route form one long shape and the pin above is missed. Strip everything thinner than a quarter pin
+        // (the route line, your arrow's ring), keep round black heads, and put the customer at the square below the
+        // head. Tested on 344 of your Uber frames; pins the old way finds are kept too.
+        if light {
+            var k = max(3, Int((0.25 * pinW).rounded()))
+            if k % 2 == 0 { k += 1 }
+            let r = k / 2
+            // Integral image of a grid, for fast window sums.
+            func integral(_ m: [Bool]) -> [Int] {
+                var s = [Int](repeating: 0, count: (gw + 1) * (gh + 1))
+                for y in 0..<gh {
+                    var row = 0
+                    for x in 0..<gw {
+                        row += m[y * gw + x] ? 1 : 0
+                        s[(y + 1) * (gw + 1) + x + 1] = s[y * (gw + 1) + x + 1] + row
+                    }
+                }
+                return s
+            }
+            func windowSum(_ s: [Int], _ x: Int, _ y: Int) -> (sum: Int, area: Int) {
+                let x0 = max(0, x - r), x1 = min(gw - 1, x + r), y0 = max(0, y - r), y1 = min(gh - 1, y + r)
+                let sum = s[(y1 + 1) * (gw + 1) + x1 + 1] - s[y0 * (gw + 1) + x1 + 1]
+                    - s[(y1 + 1) * (gw + 1) + x0] + s[y0 * (gw + 1) + x0]
+                return (sum, (x1 - x0 + 1) * (y1 - y0 + 1))
+            }
+            let sb = integral(black)
+            var eroded = [Bool](repeating: false, count: gw * gh)
+            for y in 0..<gh { for x in 0..<gw where black[y * gw + x] {
+                let w = windowSum(sb, x, y); eroded[y * gw + x] = w.sum == w.area
+            } }
+            let se = integral(eroded)
+            var opened = [Bool](repeating: false, count: gw * gh)
+            for y in 0..<gh { for x in 0..<gw where black[y * gw + x] {
+                opened[y * gw + x] = windowSum(se, x, y).sum > 0
+            } }
+            for b in blobs(opened, gw, gh) where notUnderBanner(b) {
+                let w = Double(b.w), h = Double(b.h)
+                let topCut = b.y0 <= 1
+                guard w > 0.6 * pinW, w < 1.2 * pinW, h / w > (topCut ? 0.5 : 0.8), h / w < 1.25,
+                      Double(b.n) >= (topCut ? 0.45 : 0.6) * w * h else { continue }
+                // The head is round: measure it by its width and bottom edge (works when its top is cut off).
+                let cy = Double(b.y1) - w / 2
+                let p = MapPins.Point(x: Double(b.x0 + b.x1) / 2 * Double(step), y: (Double(gy0) + cy + 1.06 * w) * Double(step))
+                let near = 0.3 * pinW * Double(step)
+                if !dropoffs.contains(where: { ($0.x - p.x) * ($0.x - p.x) + ($0.y - p.y) * ($0.y - p.y) < near * near }) {
+                    dropoffs.append(p)
+                }
+            }
+        }
         // You. Light map (5.9.6.5): find the small black arrowhead inside a white circle ringed in black. Looking for
         // the ring itself failed when Uber's route line touched it (the route's black outline merged with the ring,
         // and a bend in the route was taken for you). Dark map: unchanged.

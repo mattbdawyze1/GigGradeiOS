@@ -35,6 +35,22 @@ Each graded offer now saves its pickup detour (worst store's extra miles) and dr
 order adds). Run the 5.9 lines at the bottom of `supabase/setup.sql` before installing. Only offers graded on
 5.9 or later have detour numbers.
 
+5.9.6.12 (version 5.9.6, build 13), from your Issues log: (1) "couldn't find" entries are logged again when a card's
+store or customer line wasn't read (that's how the misreads below were found). (2) Uber's card wording ("(incl. tip)",
+"… mi) total", "Trip Radar", "Add a delivery") is checked first, so "◂ Dasher" in the status bar or "Walmart" on an
+Uber shopping order no longer make it DoorDash or Spark. (3) An "&" in a store name ("Chili's Grill & Bar") isn't the
+customer's cross streets; the store is always the first line. (4) GigGrade's own offer page and DoorDash's dash
+summaries are no longer read as offers.
+
+5.9.6.11 (version 5.9.6, build 12), from your Issues log. Uber only, plus logging: (1) Uber map, customer pin: on
+full-resolution frames the pin touched the route line and was missed; it's now found by its round head (route line
+filtered out), placed at the square below; the old way is kept too. Two-customer offers find both. (2) Store names:
+" - place" and capital "OF town" are the store's location, store numbers are ignored ("IHOP 3806"), a shorter Apple
+listing inside the card's name counts ("Starbucks Stony Brook 347" = "Starbucks"), ", NY" is dropped, "Route 111"
+stays one street. (3) Customer line: Uber badges ("Customer verification", "Accept for full access to exclusives") and
+store text spilled over before a ")" are removed. (4) No more "couldn't find" entries for cards with no store or
+customer line at all. The map is still only a backup; radius checks and DoorDash lookups unchanged.
+
 5.9.6.10 (version 5.9.6, build 11): Uber's map is still read on every offer for troubleshooting, in the background when
 it isn't needed (so banners don't wait). "Map couldn't be read" entries now say whether the map was needed (the store
 or customer couldn't be found from the text) or not.

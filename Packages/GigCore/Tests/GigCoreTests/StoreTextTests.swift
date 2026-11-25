@@ -111,4 +111,74 @@ final class StoreTextTests: XCTestCase {
         XCTAssertTrue(StoreText.sameTown("Port Jefferson Station", "Port Jefferson Sta"))
         XCTAssertFalse(StoreText.sameTown("Stony Brook", "Setauket"))
     }
+
+    // MARK: From your Issues log (5.9.6.11)
+
+    func testLocationAfterDashOrCapitalOF() {
+        XCTAssertEqual(StoreText.split("Bango - Happauge"), .init(name: "Bango", number: nil, street: nil, town: "Happauge"))
+        XCTAssertEqual(StoreText.split("Toast Coffeehouse - Port Jefferson Sta.").town, "Port Jefferson Sta")
+        XCTAssertEqual(StoreText.split("LOWE'S OF STONY BROOK, NY"), .init(name: "LOWE'S", number: nil, street: nil, town: "STONY BROOK"))
+        XCTAssertEqual(StoreText.split("MEET NOODLE OF STONYBROOK").name, "MEET NOODLE")
+        XCTAssertEqual(StoreText.split("Naz's Halal Food, Brentwood, NY").town, "Brentwood")
+        let ditch = StoreText.split("Ditch - Port Jefferson 140 Main Street")
+        XCTAssertEqual(ditch, .init(name: "Ditch", number: "140", street: "Main Street", town: "Port Jefferson"))
+        XCTAssertEqual(StoreText.split("Five Guys 5122 Nesconset Hwy. NY - 1330").name, "Five Guys")
+        XCTAssertEqual(StoreText.split("House of Pizza").name, "House of Pizza")   // lowercase "of" is part of the name
+    }
+
+    func testRouteNumbersStayWithTheStreet() {
+        let p = StoreText.split("Wendy's 527 Route 111")
+        XCTAssertEqual(p.number, "527")
+        XCTAssertEqual(p.street, "Route 111")
+        XCTAssertTrue(StoreText.streetMatches(card: p.street!, place: "NY-111"))
+    }
+
+    func testStoreNumbersAndShorterListings() {
+        XCTAssertTrue(StoreText.nameMatches(card: "IHOP 3806", place: "IHOP"))
+        XCTAssertTrue(StoreText.nameMatches(card: "HOME DEPOT 1265", place: "The Home Depot"))
+        XCTAssertTrue(StoreText.nameMatches(card: "Starbucks Stony Brook 347", place: "Starbucks"))
+        XCTAssertTrue(StoreText.nameMatches(card: "Central Pizza & Italian Restaurant", place: "Central Pizza"))
+        XCTAssertTrue(StoreText.nameMatches(card: "LOWE'S", place: "Lowe's Home Improvement"))
+        XCTAssertFalse(StoreText.nameMatches(card: "Sakura Sushi", place: "Sushi"))
+        XCTAssertFalse(StoreText.nameMatches(card: "Taco Bell", place: "Taco Time"))
+    }
+
+    func testBadgesRemovedFromTheCustomer() throws {
+        let text = "$9.20\nGuaranteed (incl. tip)\n24 min (5.9 mi) total\nBurger King (2236)\nRoe Ave & Skyhaven Dr, Patchogue\n8 Customer verification\nAccept"
+        XCTAssertEqual(try XCTUnwrap(OfferParser.parse(text)).dropoffText, "Roe Ave & Skyhaven Dr, Patchogue")
+        let text2 = "$7.00\nGuaranteed (incl. tip)\n18 min (4.0 mi) total\nSubway\nOld Town Rd & Village Green Dr, Port Jefferson Station F Accept for full access to exclusives\nMatch"
+        XCTAssertEqual(try XCTUnwrap(OfferParser.parse(text2)).dropoffText, "Old Town Rd & Village Green Dr, Port Jefferson Station")
+    }
+
+    // MARK: Misreads from your Issues log (5.9.6.12)
+
+    func testUberCardAfterSwitchingFromDoorDash() throws {
+        // "◂ Dasher" in the status bar used to make this Uber card read as DoorDash.
+        let text = "2:05\n• Dasher\nCrossfit DHP\n347\ny9 Delivery\nTrip Radar\n$4.40\nGuaranteed (incl. tip)\n• 13 min (1.8 mi) total\nPJ Sushi Teriyaki\n13th St & Jefferson Blvd, Port Jefferson\nStation\nMatch"
+        let o = try XCTUnwrap(OfferParser.parse(text))
+        XCTAssertEqual(o.app, .uber)
+        XCTAssertEqual(o.pickupText, "PJ Sushi Teriyaki")
+        XCTAssertEqual(o.dropoffText, "13th St & Jefferson Blvd, Port Jefferson Station")
+    }
+
+    func testUberWalmartOrderIsNotSpark() throws {
+        let text = "y9 Delivery\nExclusive\n$8.44\nIncludes expected tip\n• 28 min (5.8 mi) total\nWalmart CENTEREACH #2286\nDorn Pl & Hammond Rd, Centereach\n1-5 bags\nAccept"
+        XCTAssertEqual(try XCTUnwrap(OfferParser.parse(text)).app, .uber)
+    }
+
+    func testStoreNameWithAmpersandWithoutBrightness() throws {
+        let text = "y9 Add a delivery\nExclusive\n+$4.50\nGuaranteed (incl. tip)\n+ 12 min (+ 0.5 mi) total\nTex's Chicken & Burgers (272 E Main St)\nJayne Ave & Thorne St, Patchogue\nAccept"
+        let o = try XCTUnwrap(OfferParser.parse(text))
+        XCTAssertEqual(o.pickupText, "Tex's Chicken & Burgers 272 E Main St")
+        XCTAssertEqual(o.dropoffText, "Jayne Ave & Thorne St, Patchogue")
+        XCTAssertFalse(StoreText.looksLikeCrossStreets("Chili's Grill & Bar (280 Pond Path)"))
+    }
+
+    func testGigGradeOwnScreenAndDashSummaryAreNotOffers() {
+        let own = "Screenshot\n$9.04\nGuaranteed (incl. tip)\n20 min (3.0 mi) total\nChipotle Mexican Grill (1064 Route 112)\nBelle Terre Rd, Port Jefferson\nMatch\nAccepted\nDeclined\nOffer\nDoorDash\nApp\nRating\nTime"
+        XCTAssertNil(OfferParser.parse(own))
+        XCTAssertFalse(OfferParser.looksOfferish(own))
+        let summary = "Dash summary\n$22.55\n2 hr 7 min\nTotal online time\nOffers accepted\n2 out of 15\nAccept"
+        XCTAssertNil(OfferParser.parse(summary))
+    }
 }

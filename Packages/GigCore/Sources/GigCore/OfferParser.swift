@@ -66,13 +66,30 @@ public enum OfferParser {
 
     public static func looksLikeOffer(_ text: String) -> Bool {
         let t = text.lowercased()
-        return money.contains(text)
+        return !isNotAnOfferScreen(text) && money.contains(text)
             && (milesRx.contains(text) || minsRx.contains(text))
             && offerCues.contains { t.contains($0) }
     }
 
+    /// Screens with offer numbers that aren't new offers (5.9.6.12, from your Issues log): GigGrade's own offer page
+    /// (it shows the offer's screenshot, grade, Accepted / Declined) and DoorDash's dash summaries.
+    public static func isNotAnOfferScreen(_ text: String) -> Bool {
+        let t = text.lowercased()
+        let lines = Set(t.components(separatedBy: .newlines).map { $0.trimmingCharacters(in: .whitespaces) })
+        if lines.contains("accepted") && lines.contains("declined") && lines.contains("rating") { return true }
+        let squeezed = t.replacingOccurrences(of: " ", with: "")
+        if squeezed.contains("$perhour") && squeezed.contains("$permile") { return true }
+        return ["dash summary", "this dash so far", "continue dashing", "total online time"].contains { t.contains($0) }
+    }
+
+    static let uberTotal = Rx(#"\d+\s*min\s*\(\s*\+?\s*[\d.]+\s*mi\)\s*total"#)
+
     public static func detectApp(_ text: String) -> GigApp {
         let t = text.lowercased()
+        // Uber's own card wording comes first (5.9.6.12): "◂ Dasher" in the status bar (after switching from DoorDash)
+        // or "Walmart" on an Uber shopping order no longer make an Uber card look like DoorDash or Spark.
+        if t.contains("(incl. tip)") || t.contains("trip radar") || t.contains("add a delivery")
+            || uberTotal.first(t) != nil { return .uber }
         if t.contains("doordash") || t.contains("dasher") || t.contains("incl. tips") || t.contains("customer dropoff")
             || t.contains("multiple dropoffs") || t.contains("high pay for") { return .doordash }
         if t.contains("grubhub") { return .grubhub }
@@ -216,7 +233,10 @@ public enum OfferParser {
                 dropLines = Array(texts[(i + 1)...])
             } else {
                 // c) Cross streets ("A & B"), otherwise the first "street, town" line after the store.
-                let split = texts.firstIndex(where: { $0.contains("&") })
+                // 5.9.6.12: the store is always the first line, and an "&" in a store name ("Chili's Grill & Bar",
+                // "Tex's Chicken & Burgers") isn't the customer's cross streets.
+                let split = texts.indices.dropFirst().first(where: { StoreText.looksLikeCrossStreets(texts[$0]) })
+                    ?? texts.indices.dropFirst().first(where: { texts[$0].contains("&") })
                     ?? texts.indices.dropFirst().first(where: { texts[$0].contains(",") })
                 storeLines = split.map { Array(texts[..<$0]) } ?? texts
                 dropLines = split.map { Array(texts[$0...]) } ?? []
@@ -232,7 +252,18 @@ public enum OfferParser {
         // "Panera (4959 Nesconset Hwy )" -> "Panera 4959 Nesconset Hwy" (better map search)
         pickup = pickup.replacingOccurrences(of: "(", with: " ").replacingOccurrences(of: ")", with: " ")
         pickup = pickup.split(separator: " ").joined(separator: " ")
-        let dropoff = dropLines.joined(separator: " ").split(separator: " ").joined(separator: " ")
+        var dropoff = dropLines.joined(separator: " ").split(separator: " ").joined(separator: " ")
+        // 5.9.6.11: Uber's badges glued onto the customer line ("… Patchogue 8 Customer verification",
+        // "… Station F Accept for full access to exclusives") and the end of a wrapped store line that spilled over
+        // ("Country Road - Centereach) Barker Dr & Bonnie Ln, Lake Grove").
+        if let rx = try? NSRegularExpression(pattern: #"\s+\S{0,2}\s*(customer verification|accept for full access).*$"#,
+                                             options: [.caseInsensitive]) {
+            dropoff = rx.stringByReplacingMatches(in: dropoff, range: NSRange(dropoff.startIndex..., in: dropoff), withTemplate: "")
+        }
+        if let close = dropoff.lastIndex(of: ")") {
+            let tail = dropoff[dropoff.index(after: close)...].trimmingCharacters(in: .whitespaces)
+            if tail.contains("&") || tail.contains(",") { dropoff = tail }
+        }
         return (pickup.isEmpty ? nil : pickup, dropoff.isEmpty ? nil : dropoff)
     }
 
@@ -249,7 +280,8 @@ public enum OfferParser {
     /// A screen that is probably an offer, even if it can't be fully read.
     public static func looksOfferish(_ text: String) -> Bool {
         let t = text.lowercased()
-        return money.contains(text) && ["accept", "decline", "match", "incl. tip", "guaranteed", "total", "stops"]
+        return !isNotAnOfferScreen(text) && money.contains(text)
+            && ["accept", "decline", "match", "incl. tip", "guaranteed", "total", "stops"]
             .contains { t.contains($0) }
     }
 
